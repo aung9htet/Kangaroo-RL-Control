@@ -1,0 +1,5 @@
+# Comparison: the joint angles enter the network as raw normalised values (no sin/cos features).
+base: reach.yaml
+name: reach_raw
+agent: {joint_freqs: 0}
+train: {steps: 500000, checkpoints: [10000, 30000, 100000, 300000, 500000]}

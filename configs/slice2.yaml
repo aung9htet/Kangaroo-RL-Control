@@ -1,0 +1,15 @@
+# Two joints (shoulder pitch arm_right_1, elbow arm_right_4) on lattice-aligned limits, the other five at
+# home: a finite MDP whose Bellman equation is solved exactly by value iteration (kangaroo_rl.dp_check).
+base: reach.yaml
+name: slice2
+mdp:
+  active: [0, 3]
+  limits: [[-0.5, 1.0], [0.0, 2.0]]   # multiples of the 0.005 rad lattice spacing
+dp:
+  spacing: 0.005
+  n_goals: 4
+goals: {fk_samples: 400000}
+starts: {continuation: 0.5, home: 0.25, random: 0.25, home_noise: 0.05}
+train:
+  steps: 300000
+  checkpoints: [10000, 30000, 100000, 300000]
