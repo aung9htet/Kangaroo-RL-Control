@@ -1,0 +1,3 @@
+[submodule "sim/Kangaroo_Libero"]
+	path = sim/Kangaroo_Libero
+	url = ../Kangaroo_Libero.git

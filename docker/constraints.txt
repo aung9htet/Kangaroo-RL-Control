@@ -1,0 +1,2 @@
+# Versions the simulator image was validated with; pip must not replace them.
+numpy==1.26.4

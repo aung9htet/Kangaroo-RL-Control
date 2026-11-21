@@ -1,0 +1,4 @@
+# Comparison: no hindsight relabelling (every sample keeps the goal it was collected with).
+base: reach.yaml
+name: reach_noher
+train: {steps: 500000, her_ratio: 0.0, checkpoints: [10000, 30000, 100000, 300000, 500000]}

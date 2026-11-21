@@ -1,0 +1,163 @@
+{
+  "joints": [
+    {
+      "name": "arm_right_1_joint",
+      "kind": "motor",
+      "lower": -2.61799,
+      "upper": 2.61799,
+      "home": -0.24,
+      "kp": 400.0,
+      "kd": 20.0,
+      "torque_limit": 43.0
+    },
+    {
+      "name": "arm_right_2_joint",
+      "kind": "motor",
+      "lower": -1.13446,
+      "upper": 2.44346,
+      "home": 1.32,
+      "kp": 400.0,
+      "kd": 20.0,
+      "torque_limit": 43.0
+    },
+    {
+      "name": "arm_right_3_joint",
+      "kind": "motor",
+      "lower": -2.61799,
+      "upper": 2.61799,
+      "home": -1.57,
+      "kp": 400.0,
+      "kd": 20.0,
+      "torque_limit": 43.0
+    },
+    {
+      "name": "arm_right_4_joint",
+      "kind": "motor",
+      "lower": -1.13446,
+      "upper": 2.44346,
+      "home": 0.8,
+      "kp": 400.0,
+      "kd": 20.0,
+      "torque_limit": 43.0
+    },
+    {
+      "name": "arm_right_5_joint",
+      "kind": "motor",
+      "lower": -1.57,
+      "upper": 1.57,
+      "home": 0.0,
+      "kp": 400.0,
+      "kd": 20.0,
+      "torque_limit": 43.0
+    },
+    {
+      "name": "hand_right_palm_roll_joint",
+      "kind": "position",
+      "lower": -0.785,
+      "upper": 0.785,
+      "home": 1.17971e-06,
+      "kp": 100.0,
+      "kv": -0.0,
+      "torque_limit": null
+    },
+    {
+      "name": "hand_right_palm_pitch_joint",
+      "kind": "position",
+      "lower": -0.785,
+      "upper": 0.785,
+      "home": 0.00257644,
+      "kp": 100.0,
+      "kv": -0.0,
+      "torque_limit": null
+    }
+  ],
+  "placement": {
+    "chosen": {
+      "base_clearance": 0.25,
+      "base_world": [
+        -0.75,
+        0.0,
+        0.9
+      ],
+      "table_edge_base_x": 0.25,
+      "object_band_depth_m": 0.3920739962659181,
+      "samples_in_band": 868
+    },
+    "stock": {
+      "base_clearance": 0.55,
+      "base_world": [
+        -1.05,
+        0.0,
+        0.9
+      ],
+      "table_edge_base_x": 0.55,
+      "object_band_depth_m": 0.09207399626591806,
+      "samples_in_band": 17
+    }
+  },
+  "collision": {
+    "us_per_check": 331.3272149995707,
+    "colliding_fraction_uniform": 0.116,
+    "arm_geoms": 25,
+    "pairs_ignored_at_home": 0,
+    "us_per_fk": 40.68007800378837
+  },
+  "tracking": {
+    "arm_right_1_joint": {
+      "ff_max_error": 0.006610202910948659,
+      "noff_max_error": 0.02006485044950243,
+      "ff_final_error": 2.0459257371596706e-07,
+      "noff_final_error": 6.103732776430171e-07
+    },
+    "arm_right_2_joint": {
+      "ff_max_error": 0.006411246863989195,
+      "noff_max_error": 0.01981327716243353,
+      "ff_final_error": 9.869000309015163e-05,
+      "noff_final_error": 0.00023050749838438023
+    },
+    "arm_right_3_joint": {
+      "ff_max_error": 0.00447905077412436,
+      "noff_max_error": 0.01947905808172412,
+      "ff_final_error": 5.475409934341258e-07,
+      "noff_final_error": 2.670045537334076e-06
+    },
+    "arm_right_4_joint": {
+      "ff_max_error": 0.004473915249160965,
+      "noff_max_error": 0.019473815337790135,
+      "ff_final_error": 1.492248511625327e-05,
+      "noff_final_error": 5.2094825136350664e-05
+    },
+    "arm_right_5_joint": {
+      "ff_max_error": 0.01838950357147051,
+      "noff_max_error": 0.01838950357147051,
+      "ff_final_error": 2.0269268433681376e-06,
+      "noff_final_error": 2.0269268433681376e-06
+    },
+    "hand_right_palm_roll_joint": {
+      "ff_max_error": 0.010116122076492678,
+      "noff_max_error": 0.010116122076492678,
+      "ff_final_error": 0.00029831767321591984,
+      "noff_final_error": 0.00029831767321591984
+    },
+    "hand_right_palm_pitch_joint": {
+      "ff_max_error": 0.010612596354024166,
+      "noff_max_error": 0.010612596354024168,
+      "ff_final_error": 0.0002131615083117433,
+      "noff_final_error": 0.0002131615083117433
+    }
+  },
+  "goal_pool": {
+    "points": 8508,
+    "box_lower": [
+      0.28,
+      -0.6,
+      0.04
+    ],
+    "box_upper": [
+      0.65,
+      0.3,
+      0.3
+    ],
+    "aim_height_above_top": 0.14840707509808357
+  }
+}

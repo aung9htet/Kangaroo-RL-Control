@@ -1,0 +1,56 @@
+# Main experiment: reach the place where an object appears, 7 joints, sin/cos positional encoding.
+name: reach
+scene:
+  suite: libero_spatial
+  task_id: 0
+  seed: 0
+  # Robot base 0.25 m behind the table edge instead of Kangaroo_Libero's 0.55 m (written to an override
+  # file read through KANGAROO_CONFIG; the simulator repository is not changed).
+  sim_overrides: {base_clearance: 0.25}
+  target_object: akita_black_bowl_2     # the object that "appears" at the goal in the simulator (rests on the table)
+  aim_offset: [0.0, 0.0, 0.15]          # hover: 15 cm above the bowl's base, ~10 cm above its rim
+mdp:
+  dt: 0.05                              # s per decision = 5 simulator ticks
+  v_max: 1.0                            # rad/s
+  levels: [-1.0, -0.3, -0.1, 0.0, 0.1, 0.3, 1.0]
+  horizon: 100                          # steps = 5 s
+  collision: true
+  q_noise: 0.0                          # rad, optional noise on the model transition
+reward:
+  d_far: 0.5
+  sigma: 0.02
+  lam_c: 1.0
+  lam_a: 0.01
+goals:                                  # relative to the table: beyond its near edge, sideways, above the top
+  x_from_edge: [0.03, 0.40]
+  y: [-0.60, 0.30]
+  z_above_top: [0.04, 0.30]
+  voxel: 0.02
+  fk_samples: 2000000
+starts: {continuation: 0.5, home: 0.25, random: 0.25, home_noise: 0.05}
+agent:
+  joint_freqs: 4                        # L for the joint angles (0 = raw angles)
+  goal_freqs: 4
+  hidden: 256
+  depth: 2
+  gamma: 0.95
+  lr: 3.0e-4
+  batch: 256
+  tau: 0.005
+  grad_clip: 10.0
+  double: true
+  n_step: 3                             # n-step return (1 = one-step Q-learning; v1 of this study)
+train:
+  steps: 1000000
+  n_envs: 16
+  updates_per_step: 4
+  warmup: 10000
+  replay: 1000000
+  her_ratio: 0.8
+  eps_start: 1.0
+  eps_end: 0.02
+  eps_fraction: 0.15
+  max_repeat: 10
+  eval_every: 25000
+  eval_goals: 256
+  checkpoints: [10000, 30000, 100000, 300000, 1000000]
