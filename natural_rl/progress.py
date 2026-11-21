@@ -20,8 +20,9 @@ def fmt_time(seconds: float) -> str:
 class Progress:
     def __init__(self, model: str, run_id: str, reward: str, seed: int, total: int, n_checkpoints: int, stream=None,
                  tty: bool | None = None, bar_width: int = 24, min_interval: float = 0.5, plain_every: float = 0.05,
-                 plain_seconds: float = 120.0, clock=time.time):
+                 plain_seconds: float = 120.0, clock=time.time, out_dir=None, cell: str = ''):
         self.model, self.run_id, self.reward, self.seed = model, run_id, reward, seed
+        self.out_dir, self.cell, self._last_json = out_dir, cell, 0.0
         self.total, self.n_checkpoints, self.saved = max(1, int(total)), int(n_checkpoints), 0
         self.stream = stream or sys.stdout
         self.tty = self.stream.isatty() if tty is None else tty
@@ -44,17 +45,36 @@ class Progress:
         videos_left = max(0, self.n_checkpoints - self.saved)
         per_video = self.video_seconds / self.videos if self.videos else 0.0
         eta = (self.total - step) / rate + per_video * videos_left if rate > 0 else float('inf')
-        text = (f'{self.model} | {self.run_id} | {self.reward} seed {self.seed} | {bar} {frac * 100:5.1f}% '
+        text = (f'{self.model} | {self.run_id} | {self.reward}{" " + self.cell if self.cell else ""} seed {self.seed} | {bar} {frac * 100:5.1f}% '
                 f'{step:,}/{self.total:,} | ckpt {self.saved}/{self.n_checkpoints} | {rate:,.0f} tr/s | '
                 f'{fmt_time(elapsed)} elapsed, ETA {fmt_time(eta)}')
         return text + (f' | {self.phase_text}' if self.phase_text else '')
 
     # ------------------------------------------------------------------ events
+    def _write_json(self, now: float, force: bool = False) -> None:
+        """progress.json in the run folder: what an overall display (`run-all`) reads; written at most every 2 s."""
+        if self.out_dir is None or (not force and now - self._last_json < 2.0):
+            return
+        import json
+        import os
+        from pathlib import Path
+        path = Path(self.out_dir) / 'progress.json'
+        try:
+            tmp = path.with_suffix('.tmp')
+            tmp.write_text(json.dumps({'run_id': self.run_id, 'model': self.model, 'cell': self.cell, 'step': int(self.step),
+                                       'total': int(self.total), 'checkpoints': int(self.saved), 'n_checkpoints': int(self.n_checkpoints),
+                                       'updated': time.time()}))
+            os.replace(tmp, path)
+            self._last_json = now
+        except OSError:
+            pass
+
     def update(self, step: int, saved: int | None = None) -> None:
         self.step = step
         if saved is not None:
             self.saved = saved
         now = self.clock()
+        self._write_json(now)
         if self.tty:
             if now - self._last_draw >= self.min_interval or step >= self.total:
                 self._draw()
@@ -97,6 +117,7 @@ class Progress:
         self.saved += 1
 
     def finish(self, status: str) -> None:
+        self._write_json(self.clock(), force=True)
         if self.tty and self._drawn:
             self.stream.write('\r\033[K')
         self.stream.write(f'[run] {self.model} | {self.run_id}: {status} after {fmt_time(self.clock() - self.start)}, '

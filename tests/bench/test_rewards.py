@@ -184,6 +184,9 @@ def test_all_twelve_profiles_are_registered_with_the_protocol_terms(reward_yaml)
 
 
 def test_profiles_with_calibrated_terms_refuse_to_build_until_the_register_is_locked(reward_yaml):
+    reward_yaml = copy.deepcopy(reward_yaml)                                       # the shipped register may already be locked
+    reward_yaml['status'] = 'unlocked'
+    reward_yaml['calibration']['lambda'] = {k: None for k in reward_yaml['calibration']['lambda']}
     load_profile(reward_yaml, 'r0_original')                                       # no calibrated term
     load_profile(reward_yaml, 'r1_hold')                                           # hold weights are fixed, not calibrated
     for name in ('r2_time', 'r3_path', 'r4_speed', 'r5_smooth', 'r6_rom', 'r7_balanced', 'r8_drop_path', 'r11_drop_rom'):

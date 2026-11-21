@@ -55,10 +55,17 @@ def cmd_catalog(args) -> int:
             print(f'{name:20s} limit={b["limit"]} expected unsafe proposal events per 100-decision episode')
     elif what == 'programme':
         policies = args.policies.split(',') if args.policies else None
+        cells = programme.parse_cells(args.actions, args.states)
+        later = programme.parse_cells(*args.cells.split(':')) if args.cells else (programme.LEGACY_CELL,)
         if args.select:
-            from .selection import p3_selection
-            policies, table = p3_selection()
-            print('P3 selection (validation terminal-hold rate on r7_balanced, ties -> lower unsafe rate):')
+            from .selection import best_cells, p3_selection
+            if not args.cells:
+                later, cell_table = best_cells(cells, top=args.top_cells)
+                print('Cell selection (mean validation R-HKS of the P2 r7_balanced runs; ties -> lower unsafe rate):')
+                print(cell_table.to_string(index=False))
+                print('selected cells:', ', '.join(f'{a}/{s}' for a, s in later))
+            policies, table = p3_selection(cell=later[0])
+            print(f'P3 controller selection in cell {later[0][0]}/{later[0][1]} (validation terminal-hold rate on r7_balanced, ties -> lower unsafe rate):')
             print(table.to_string(index=False))
             print('selected:', ','.join(policies))
         phases = [args.phase] if args.phase else ['P0', 'P1', 'P2', 'P3', 'P4']
@@ -66,7 +73,7 @@ def cmd_catalog(args) -> int:
             if ph == 'P3' and not policies:
                 print('P3: pass --policies decqn,A,B,C (selected on validation terminal-hold rate before any test result)')
                 continue
-            runs = programme.phase_runs(ph, policies if ph == 'P3' else None)
+            runs = programme.phase_runs(ph, policies if ph == 'P3' else None, later if ph in ('P3', 'P4') else cells)
             t = programme.totals(runs)
             print(f'# {ph}: {t["runs"]} runs, {t["transitions"] / 1e6:.0f}M transitions, {t["videos"]} checkpoint videos')
             if args.commands or args.with_eval:
@@ -77,7 +84,7 @@ def cmd_catalog(args) -> int:
                     for line in lines:
                         print(line)
         if not args.phase:
-            tot = programme.programme_totals()['TOTAL']
+            tot = programme.programme_totals(cells=cells, later_cells=later)['TOTAL']
             print(f'# TOTAL: {tot["runs"]} runs, {tot["transitions"] / 1e6:.0f}M transitions, {tot["videos"]} checkpoint videos')
     return 0
 
@@ -199,7 +206,7 @@ def _run_context(run_id: str, keep_env: bool = False):
     out = find_run(run_id)
     manifest = json.loads((out / 'manifest.json').read_text())
     exp = make_experiment(load_config(repo_root() / 'configs' / 'reach.yaml'), keep_env=keep_env)
-    spec = ObsSpec(manifest.get('obs_version', 'v2'), exp.scene.lower, exp.scene.upper, exp.pool.lower, exp.pool.upper)
+    spec = ObsSpec.for_scene(manifest.get('obs_version', 'v2'), exp.scene, exp.pool, action_mode=manifest.get('action_mode', 'velocity'))
     profile = load_profile(reward_config(), manifest['reward'])
     return out, manifest, exp.scene, spec, profile
 
@@ -222,6 +229,25 @@ def cmd_train(args) -> int:
     try:
         return run_training(args)
     except (ModelNotImplemented, RewardNotLocked) as error:
+        print(f'ERROR: {error}', file=sys.stderr)
+        return 2
+    except ValueError as error:                                   # e.g. an unknown --obs component
+        print(f'ERROR: {error}', file=sys.stderr)
+        return 2
+
+
+def cmd_run_all(args) -> int:
+    import signal
+    from .orchestrate import run_all
+
+    def stop(signum, frame):                          # `docker stop` and `kill` end the programme the same way as Ctrl-C
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        return run_all(phases=args.phases.split(','), actions=args.actions, states=args.states, workers=args.workers, device=args.device,
+                       threads=args.threads, dry_run=args.dry_run, top_cells=args.top_cells, with_eval=not args.train_only,
+                       status=args.status)
+    except (RuntimeError, ValueError, FileNotFoundError) as error:
         print(f'ERROR: {error}', file=sys.stderr)
         return 2
 
@@ -248,7 +274,7 @@ def cmd_play(args) -> int:
     import numpy as np
     import pandas as pd
     from .checkpoints import checkpoint_dir, tree_sha256
-    from .env.reach_env import ReachBench
+    from .env.factory import make_env
     from .env.tasks import find_task, load_manifest, task_arrays
     from .models.registry import load_policy
     from .registry import load_yaml, suite_path
@@ -264,7 +290,7 @@ def cmd_play(args) -> int:
     tasks = task_arrays(doc)
     index = tasks['task_id'].index(args.task_id)
     policy = load_policy(manifest['model'], ckpt / 'policy_state', spec)
-    env = ReachBench(scene, 1, profile, spec, tasks, horizon=int(find_task(doc, args.task_id)['horizon_decisions']))
+    env = make_env(scene, 1, profile, spec, tasks, horizon=int(find_task(doc, args.task_id)['horizon_decisions']))
     seed = int(load_yaml('configs/eval/checkpoint_video_v1.yaml')['evaluation_seed'])
     roll = rollout(policy, env, [index], seed=seed)
     ee, goal = roll['ee'][0], roll['goal'][0]
@@ -283,7 +309,7 @@ def cmd_play(args) -> int:
     k = np.arange(len(d))
     pd.DataFrame({'k': k, 't_s': k * roll['dt'], 'joint_angles_rad': list(roll['q'][0]), 'end_effector_xyz_m': list(ee),
                   'goal_xyz_m': [list(goal)] * len(d), 'distance_m': d, 'coordinate_frame': 'robot0_base_link',
-                  'backend': 'kinematic'}).to_parquet(trace, index=False)
+                  'backend': spec.backend}).to_parquet(trace, index=False)
     print(f'trace written to {trace.resolve()}')
     return 0
 
@@ -359,6 +385,7 @@ def cmd_eval(args) -> int:
         print(f'ERROR: --manifest {args.manifest} is not the registered manifest {suite_path(suite)} of suite {suite}', file=sys.stderr)
         return 2
     out, manifest, scene, spec, profile = _run_context(args.run_id, keep_env=args.backend == 'physics')
+    backend = args.backend or manifest.get('backend', 'kinematic')       # a run is evaluated on the backend it was trained on
     index = read_index(out)
     saved = [int(s) for s in index['checkpoint_step']]
     if args.all_checkpoints:
@@ -369,13 +396,17 @@ def cmd_eval(args) -> int:
         steps = [max(saved)]
     else:
         if suite in ('test_v1', 'ood_v1'):
-            steps = [select_checkpoint(out, 'kinematic')]       # selection uses the training backend's validation results only
-            print(f'validation-selected checkpoint: step {steps[0]} (highest kinematic val terminal-hold rate; tie -> fewer unsafe '
+            steps = [select_checkpoint(out, manifest.get('backend', 'kinematic'))]       # the training backend's validation results only
+            print(f'validation-selected checkpoint: step {steps[0]} (highest {manifest.get("backend", "kinematic")} val terminal-hold rate; tie -> fewer unsafe '
                   'events -> later step)')
         else:
             steps = [max(saved)]
     for step in steps:
-        metrics = evaluate_checkpoint(out, manifest, scene, spec, profile, step, suite, args.backend)
+        try:
+            metrics = evaluate_checkpoint(out, manifest, scene, spec, profile, step, suite, backend)
+        except NotImplementedError as error:
+            print(f'ERROR: {error}', file=sys.stderr)
+            return 2
         unsafe = metrics['unsafe_events'].mean()
         print(f'{args.run_id} step {step:>9d} {suite}: n={len(metrics)}  terminal hold {metrics["terminal_hold"].mean():.3f}  '
               f'first entry {metrics["first_entry"].mean():.3f}  final error median {metrics["final_error_m"].median():.4f} m  '
@@ -444,18 +475,21 @@ def cmd_calibrate(args) -> int:
     from .metrics.hks import ScalerError, SCALED_METRICS, fit_scalers
     import yaml
     runs = [r for r in args.runs.split(',') if r]
-    frames = []
+    frames, backends = [], set()
     for run_id in runs:
         run = find_run(run_id)
-        paths = sorted((run / 'eval' / args.backend / 'val_v1').glob('step_*/episode_metrics.parquet'))
+        backend = args.backend or json.loads((run / 'manifest.json').read_text()).get('backend', 'kinematic')
+        paths = sorted((run / 'eval' / backend / 'val_v1').glob('step_*/episode_metrics.parquet'))
         if not paths:
             print(f'no val_v1 evaluation for {run_id}: run `eval --run-id {run_id} --suite val_v1 --final` first', file=sys.stderr)
             return 1
+        backends.add(backend)
         frames.append(pd.read_parquet(paths[-1]))                          # the final saved step of the run
     pooled = pd.concat(frames, ignore_index=True)
     usable = pooled[pooled['terminal_hold'] & pooled['valid']]
     cfg = metrics_config()['hks']
-    print(f'pooled {len(pooled)} validation episodes from {len(runs)} run(s); {len(usable)} successful and quality-valid ({args.backend})')
+    print(f'pooled {len(pooled)} validation episodes from {len(runs)} run(s) on backend(s) {sorted(backends)}; '
+          f'{len(usable)} successful and quality-valid')
     try:
         scalers = fit_scalers({m: usable[m].to_numpy() for m in SCALED_METRICS}, int(cfg['scaler_min_episodes']),
                                upper_ladder=tuple(cfg['scaler_upper_ladder']))
@@ -464,14 +498,17 @@ def cmd_calibrate(args) -> int:
         return 1
     path = repo_root() / 'configs' / 'metrics' / 'hks_scalers_v1.yaml'
     doc = yaml.safe_load(path.read_text()) if path.exists() else {'backends': {}}
-    if doc.get('status') == 'locked' and args.backend in doc['backends']:
-        print(f'{path} already holds locked scalers for {args.backend}; a new benchmark id is needed to change them', file=sys.stderr)
+    held = sorted(b for b in backends if b in doc.get('backends', {}))
+    if doc.get('status') == 'locked' and held:
+        print(f'{path} already holds locked scalers for {held}; a new benchmark id is needed to change them', file=sys.stderr)
         return 1
     doc.update(version='hks_scalers_v1', status='locked')
-    doc['backends'][args.backend] = {**scalers, '_provenance': {'source_runs': runs, 'n_episodes_pooled': int(len(usable)),
-                                                                 'selection': 'terminal_hold and quality-valid validation episodes, final checkpoint of each run'}}
+    for backend in sorted(backends):                  # ONE pooled fit is written for every backend present, so that HKS and R-HKS are
+        doc['backends'][backend] = {**scalers, '_provenance': {         # on the same scale for every action mode and state
+            'source_runs': runs, 'n_episodes_pooled': int(len(usable)), 'backends_pooled': sorted(backends),
+            'selection': 'terminal_hold and quality-valid validation episodes, final checkpoint of each run, pooled over all runs'}}
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
-    print(f'locked HKS scalers for {args.backend} written to {path}')
+    print(f'locked HKS scalers (one pooled fit) for {sorted(backends)} written to {path}')
     return 0
 
 
@@ -518,6 +555,10 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument('what', choices=['models', 'rewards', 'suites', 'budgets', 'programme'])
     c.add_argument('--phase')
     c.add_argument('--policies', help='P3 only: decqn,A,B,C')
+    c.add_argument('--actions', help='P1/P2 cells: comma-separated action modes (default: velocity,position,torque)')
+    c.add_argument('--states', help='P1/P2 cells: comma-separated states (default: v1..v8)')
+    c.add_argument('--cells', help='P3/P4 cells as ACTIONS:STATES, e.g. torque:v3 or velocity,position:v2 (default: the legacy velocity:v2 cell; --select chooses from P2)')
+    c.add_argument('--top-cells', type=int, default=1, help='--select: how many cells P3/P4 run on (default 1)')
     c.add_argument('--commands', action='store_true', help='print every registered train command')
     c.add_argument('--with-eval', action='store_true', help='also print the verify and evaluation lines of every run, in order')
     c.add_argument('--todo', action='store_true', help='leave out runs and steps whose outputs already exist in results/')
@@ -546,8 +587,11 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument('--contract', default='bench_v1', choices=['bench_v1', 'hist_v1'])
     t.add_argument('--strict-video', action='store_true', help='abort at the first failed video instead of at the end')
     t.add_argument('--smoke', action='store_true', help='disposable run under results/smoke (never part of main_v1)')
-    t.add_argument('--allow-dirty', action='store_true')
-    t.add_argument('--restart', action='store_true', help='an unfinished run of this id is moved to results/abandoned/ and trained again from step 0')
+    t.add_argument('--action', default='velocity', choices=['velocity', 'position', 'torque'],
+                   help='what the policy output means: joint velocity, joint position step or joint torque')
+    t.add_argument('--obs', default=None,
+                   help='the state the policy sees: v1..v8 or a comma-separated list of components (default: v2 for velocity and position, v3 for torque)')
+    t.add_argument('--allow-dirty', action='store_true', help='accepted and ignored: there is no clean-tree check any more')
     t.add_argument('--threads', type=int, default=4)
     t.add_argument('--device', default='auto')
     t.add_argument('--set', nargs='*', default=[], metavar='KEY=VALUE', help='override model config values, e.g. hyper.warmup=500')
@@ -589,7 +633,7 @@ def build_parser() -> argparse.ArgumentParser:
     cal.add_argument('--pilot-runs', default='', help='rewards: comma-separated run ids to roll out on train_v1')
     cal.add_argument('--steps', default='final', choices=['final', 'all'], help='rewards: which checkpoints of the pilot runs')
     cal.add_argument('--runs', default='', help='scalers: comma-separated run ids with a val_v1 evaluation')
-    cal.add_argument('--backend', default='kinematic')
+    cal.add_argument('--backend', default=None, help='scalers: force one backend for every run (default: each run\'s own backend, all pooled)')
     cal.add_argument('--dry-run', action='store_true')
     cal.set_defaults(fn=cmd_calibrate)
 
@@ -604,8 +648,22 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument('--checkpoint-step', type=int)
     e.add_argument('--all-checkpoints', action='store_true')
     e.add_argument('--final', action='store_true', help='evaluate the final checkpoint instead of the validation-selected one')
-    e.add_argument('--backend', default='kinematic', choices=['kinematic', 'physics'])
+    e.add_argument('--backend', default=None, choices=['kinematic', 'dynamics', 'physics'],
+                   help='default: the backend the run was trained on (dynamics for torque runs); physics = full-scene evaluation stratum')
     e.set_defaults(fn=cmd_eval)
+
+    ra = sub.add_parser('run-all', help='run the whole programme (all phases, actions, states) in parallel with one overall progress display')
+    ra.add_argument('--phases', default='P0,P1,P2,P3,P4')
+    ra.add_argument('--actions', help='comma-separated action modes (default: velocity,position,torque)')
+    ra.add_argument('--states', help='comma-separated states (default: v1..v8)')
+    ra.add_argument('--workers', default='auto', help='parallel runs (default auto: as many as the CPU cores and memory allow)')
+    ra.add_argument('--device', default='auto', choices=['auto', 'cpu', 'cuda'], help='auto = the GPU when there is one')
+    ra.add_argument('--threads', type=int, default=None, help='CPU threads per run (default 2 with a GPU, 4 without)')
+    ra.add_argument('--top-cells', type=int, default=1, help='how many (action, state) cells P3 and P4 run on')
+    ra.add_argument('--train-only', action='store_true', help='train and record only; no verification or evaluation lines')
+    ra.add_argument('--status', action='store_true', help='show what is finished and what is left of the programme, and the command to continue; starts nothing')
+    ra.add_argument('--dry-run', action='store_true', help='print the plan and the resources it would use, then stop')
+    ra.set_defaults(fn=cmd_run_all)
 
     a = sub.add_parser('analyse', help='summarise the evaluation tables of a run')
     a.add_argument('--run-id', required=True)
@@ -621,4 +679,10 @@ def main(argv=None) -> int:
     if args.command == 'video' and args.action == 'record' and args.checkpoint_step is None:
         print('video record needs --checkpoint-step', file=sys.stderr)
         return 2
+    if args.command == 'catalog':
+        try:
+            return args.fn(args)
+        except (RuntimeError, FileNotFoundError) as error:     # e.g. --select before the P2 results or the scalers exist
+            print(f'ERROR: {error}', file=sys.stderr)
+            return 2
     return args.fn(args)

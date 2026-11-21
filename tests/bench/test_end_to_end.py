@@ -128,28 +128,32 @@ SAME = ['train', '--model', 'decqn', '--reward', 'r1_hold', '--suite', 'train_v1
         '--checkpoint-every', '1600', '--record-every-checkpoint', '--smoke', '--set', 'hyper.warmup=800', 'hyper.replay=16000']
 
 
-def test_starting_a_complete_run_again_skips_it_and_keeps_every_result(run, capsys):
-    before = (run / 'manifest.json').read_bytes()
-    assert main(SAME) == 0
-    assert '[skip]' in capsys.readouterr().out
-    assert (run / 'manifest.json').read_bytes() == before
-
-
-def test_a_complete_run_id_cannot_be_reused_for_another_configuration(run):
+def test_starting_an_existing_run_id_replaces_that_run_completely(run, capsys):
+    old = json.loads((run / 'manifest.json').read_text())
+    (run / 'leftover.txt').write_text('from the previous run')
     other = SAME.copy()
-    other[other.index('--seed') + 1] = '7'
-    with pytest.raises(FileExistsError, match='different configuration'):
-        main(other)
-    assert (run / 'manifest.json').exists()
+    other[other.index('--seed') + 1] = '7'                                       # another configuration under the same id: replaced too
+    assert main(other) == 0
+    assert '[replace]' in capsys.readouterr().out
+    assert not (run / 'leftover.txt').exists()
+    new = json.loads((run / 'manifest.json').read_text())
+    assert new['status'] == 'complete' and new['seed'] == 7 and old['seed'] == 0
 
 
-def test_an_unfinished_run_stops_unless_restart_moves_it_aside(run, capsys):
-    import json
-    manifest = json.loads((run / 'manifest.json').read_text())
-    (run / 'manifest.json').write_text(json.dumps({**manifest, 'status': 'running'}))
-    with pytest.raises(FileExistsError, match='--restart'):                      # no silent override of a partial run
-        main(SAME)
-    assert (run / 'manifest.json').exists()
-    assert main(SAME + ['--restart']) == 0
-    assert list((run.parents[4] / 'abandoned').glob(f'{RUN}-*'))                 # the old folder is kept, not deleted
-    assert json.loads((run / 'manifest.json').read_text())['status'] == 'complete'
+def test_a_dirty_working_tree_does_not_block_a_start(run, monkeypatch):
+    import natural_rl.train as train
+    real = train.run_provenance
+    monkeypatch.setattr(train, 'run_provenance', lambda *a, **k: {**real(*a, **k), 'rl': {'commit': 'x', 'dirty': True, 'dirty_files': ['f.py']}})
+    assert main(SAME) == 0
+    assert json.loads((run / 'manifest.json').read_text())['provenance']['rl']['dirty'] is True
+
+
+def test_an_empty_run_folder_does_not_block_a_start(run):
+    folder = run.parent / 'it-empty'
+    folder.mkdir()                                                               # what an older refused start left behind
+    args = SAME.copy()
+    args[args.index(RUN)] = 'it-empty'
+    args[args.index('--steps') + 1] = '800'
+    args[args.index('--checkpoint-every') + 1] = '800'
+    assert main(args) == 0
+    assert (folder / 'manifest.json').exists()

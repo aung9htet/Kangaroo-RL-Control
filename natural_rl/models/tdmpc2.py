@@ -153,7 +153,7 @@ def train(ctx) -> None:
         v = box_to_velocity(action, ctx.spec.v_max)
         obs, _, done, info = env.step(v)
         replay.add(env.t - 1, info['q'], info['q_next'], info['p'], info['p_next'], v, action, info['collision_proposed'],
-                   info['clip_proposed'])
+                   info['clip_proposed'], info['qd_next'])
         step += 1
         first = False
         if done:

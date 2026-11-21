@@ -2,11 +2,11 @@
 import pytest
 
 from natural_rl.checkpoints import scheduled_steps
-from natural_rl.programme import phase_runs, programme_totals, train_command, totals
+from natural_rl.programme import ALL_CELLS, LEGACY_CELL, cell_tag, parse_cells, phase_runs, programme_totals, train_command, totals
 
 
-def test_phase_and_grand_totals_match_the_protocol():
-    t = programme_totals()
+def test_phase_and_grand_totals_match_the_protocol_for_the_original_cell():
+    t = programme_totals(cells=(LEGACY_CELL,))
     assert t['P0'] == {'runs': 3, 'transitions': 3_000_000, 'videos': 63}
     assert t['P1'] == {'runs': 60, 'transitions': 12_000_000, 'videos': 300}
     assert t['P2'] == {'runs': 100, 'transitions': 100_000_000, 'videos': 2100}
@@ -15,10 +15,38 @@ def test_phase_and_grand_totals_match_the_protocol():
     assert t['TOTAL'] == {'runs': 373, 'transitions': 325_000_000, 'videos': 6873}
 
 
-def test_every_run_id_is_unique_across_the_programme():
+def test_every_run_id_is_unique_across_the_programme_and_the_grid():
     ids = [r['run_id'] for p in ('P0', 'P1', 'P2', 'P4') for r in phase_runs(p)]
     ids += [r['run_id'] for r in phase_runs('P3', ['decqn', 'ppo_md', 'sac', 'td3'])]
-    assert len(ids) == len(set(ids)) == 373
+    assert len(ids) == len(set(ids))
+    one = [r['run_id'] for p in ('P0', 'P1', 'P2', 'P4') for r in phase_runs(p, cells=(LEGACY_CELL,))]
+    assert len(one) + 200 == 373                                                  # the original single-cell programme
+
+
+def test_the_grid_has_twenty_four_cells_with_the_original_one_first_and_untagged():
+    assert len(ALL_CELLS) == 24 and ALL_CELLS[0] == LEGACY_CELL and cell_tag(*LEGACY_CELL) == ''
+    assert phase_runs('P2')[0]['run_id'] == 'decqn-r1-s00'                          # the runs already on disk keep their ids
+    assert parse_cells('torque', 'v3') == (('torque', 'v3'),) and len(parse_cells('position', None)) == 8
+    with pytest.raises(ValueError):
+        parse_cells('jerk', None)
+
+
+def test_p1_and_p2_cover_every_cell_and_p3_p4_follow_the_chosen_cell():
+    t = programme_totals()
+    assert t['P1']['runs'] == 1440 and t['P2']['runs'] == 2400 and t['P3']['runs'] == 200 and t['P4']['runs'] == 10
+    assert t['TOTAL']['runs'] == 4053 and t['TOTAL']['transitions'] == 2_901_000_000 and t['TOTAL']['videos'] == 62_073
+    ids = {r['run_id'] for r in phase_runs('P2')}
+    assert {'decqn-r7-tor-o3-s04', 'sac_pidlag-r7-bmod-pos-o1-s02', 'ppo_box-r1-o1-s00'} <= ids
+    p4 = phase_runs('P4', cells=(('torque', 'v3'),))
+    assert {r['run_id'] for r in p4} >= {'sac_pidlag-r7-bstrict-tor-o3-s05'} and all(r['action'] == 'torque' for r in p4)
+
+
+def test_train_commands_carry_action_and_state_only_when_they_are_not_the_matched_default():
+    cmd = lambda rid: train_command(next(r for r in phase_runs('P2') if r['run_id'] == rid))
+    assert '--action' not in cmd('decqn-r1-s00') and '--obs' not in cmd('decqn-r1-s00')
+    assert '--action torque' in cmd('decqn-r1-tor-o3-s00') and '--obs' not in cmd('decqn-r1-tor-o3-s00')   # torque's matched state is v3
+    assert '--action torque --obs v2' in cmd('decqn-r1-tor-s00') and '--action position --obs v1' in cmd('decqn-r1-pos-o1-s00')
+    assert '--obs v3' in cmd('decqn-r1-o3-s00') and '--action' not in cmd('decqn-r1-o3-s00')
 
 
 def test_checkpoint_schedule_has_step_zero_cadence_and_off_cadence_final():

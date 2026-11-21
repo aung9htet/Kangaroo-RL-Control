@@ -55,7 +55,7 @@ def collect_pilot(runs: list, split: str = 'train_v1', steps: str = 'final') -> 
 
     from ..checkpoints import checkpoint_dir, read_index
     from ..env.contract import ObsSpec
-    from ..env.reach_env import ReachBench
+    from ..env.factory import make_env
     from ..env.tasks import load_manifest, task_arrays
     from ..models.registry import load_policy
     from ..registry import find_run, repo_root, reward_config, suite_path
@@ -72,12 +72,12 @@ def collect_pilot(runs: list, split: str = 'train_v1', steps: str = 'final') -> 
         run = find_run(run_id)
         import json
         manifest = json.loads((run / 'manifest.json').read_text())
-        spec = ObsSpec(manifest.get('obs_version', 'v2'), exp.scene.lower, exp.scene.upper, exp.pool.lower, exp.pool.upper)
+        spec = ObsSpec.for_scene(manifest.get('obs_version', 'v2'), exp.scene, exp.pool, action_mode=manifest.get('action_mode', 'velocity'))
         saved = [int(s) for s in read_index(run)['checkpoint_step']]
         chosen = saved if steps == 'all' else [max(saved)]
         for step in chosen:
             policy = load_policy(manifest['model'], checkpoint_dir(run, step) / 'policy_state', spec)
-            env = ReachBench(exp.scene, 32, profile, spec, tasks, horizon=100)
+            env = make_env(exp.scene, 32, profile, spec, tasks, horizon=100)
             for begin in range(0, len(tasks['task_id']), env.n):
                 index = np.arange(begin, min(begin + env.n, len(tasks['task_id'])))
                 padded = np.r_[index, np.full(env.n - len(index), index[-1])]

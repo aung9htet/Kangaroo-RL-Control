@@ -105,7 +105,10 @@ def test_a_registered_but_unwritten_model_fails_loudly_and_is_never_substituted(
                  '--run-id', 'ctl-td3x', '--checkpoint-every', '800', '--smoke']) == 2
 
 
-def test_a_calibrated_reward_profile_refuses_to_train_while_the_register_is_unlocked(results_root, capsys):
+def test_a_calibrated_reward_profile_refuses_to_train_while_the_register_is_unlocked(results_root, capsys, monkeypatch):
+    import natural_rl.train as train
+    unlocked = {**train.reward_config(), 'status': 'unlocked'}
+    monkeypatch.setattr(train, 'reward_config', lambda: unlocked)
     assert main(['train', '--model', 'decqn', '--reward', 'r7_balanced', '--suite', 'train_v1', '--steps', '1600', '--seed', '0',
                  '--run-id', 'ctl-locked', '--checkpoint-every', '800', '--smoke']) == 2
     assert 'calibrate' in capsys.readouterr().err

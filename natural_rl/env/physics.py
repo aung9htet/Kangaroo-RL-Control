@@ -23,15 +23,21 @@ class PhysicsBench:
                  mode: str = 'B'):
         from kangaroo_rl.envs.libero import LiberoReachEnv
         from kangaroo_rl.mdp import Reward, VelocityBins
+        if obs_spec.action_mode == 'torque':
+            raise NotImplementedError('the full-scene physics backend (KangarooEnv) accepts position targets only; torque commands are '
+                                      'evaluated on the dynamics backend')
         if scene.env is None:
             raise RuntimeError('the physics backend needs the scene built with keep_env=True (the simulator environment)')
         self.scene, self.profile, self.obs_spec, self.tasks, self.horizon, self.dt = scene, profile, obs_spec, tasks, horizon, dt
-        self.sim = LiberoReachEnv(scene, VelocityBins(v_max=obs_spec.v_max, dt=dt), Reward(), horizon, mode=mode, target_object=None)
+        self.sim = LiberoReachEnv(scene, VelocityBins(v_max=obs_spec.v_max, dt=dt), Reward(), horizon, mode=mode, target_object=None,
+                                   feedforward=obs_spec.action_mode == 'velocity')     # position steps are pure position targets
         self.lower, self.upper, self.n_joints = scene.lower.copy(), scene.upper.copy(), scene.n_joints
         self.q = np.tile(scene.home, (1, 1))
         self.p = np.zeros((1, 3))
         self.goal = np.zeros((1, 3))
         self.state = initial_state(1, self.n_joints)
+        self.qd = np.zeros((1, self.n_joints))
+        self.p_prev = np.zeros((1, 3))
         self.t = 0
 
     def reset(self, task_index):
@@ -39,14 +45,17 @@ class PhysicsBench:
         self.sim.reset(self.tasks['goal'][i], self.tasks['q0'][i])
         self.q = self.sim.measured()[None].copy()
         self.p = self.sim.reach_point()[None].copy()
+        self.p_prev = self.p.copy()
         self.goal = np.asarray(self.tasks['goal'][i], dtype=np.float64)[None].copy()
         self.state = initial_state(1, self.n_joints)
+        self.qd = np.zeros((1, self.n_joints))
         self.t = 0
         return self.observe()
 
     def observe(self):
         s = self.state
-        return self.obs_spec.encode(self.q, self.goal, s['v_prev'], s['count'], s['held_once'])
+        return self.obs_spec.encode(self.q, self.goal, s['v_prev'], s['count'], s['held_once'], self.qd,
+                                    p=self.p, p_prev=self.p_prev, step=self.t)
 
     def step(self, v_cmd):
         v = np.asarray(v_cmd, dtype=np.float64).reshape(1, -1)
@@ -61,10 +70,11 @@ class PhysicsBench:
         raw, self.state = step_terms(self.state, p, p_next, self.goal, v, q_next, collided, self.lower, self.upper, self.profile.config)
         total, weighted = self.profile.combine(raw)
         cost = unsafe_cost(collided, clip)
-        info = {'q': q.copy(), 'q_next': q_next, 'p': p.copy(), 'p_next': p_next, 'v_cmd': v.copy(), 'v_exec': (q_next - q) / self.dt,
+        info = {'q': q.copy(), 'q_next': q_next, 'p': p.copy(), 'p_next': p_next, 'v_cmd': v.copy(), 'v_exec': (q_next - q) / self.dt, 'qd_next': (q_next - q) / self.dt,
                 'collision_proposed': collided.copy(), 'collision_rejected': collided.copy(), 'clip_proposed': clip, 'cost': cost,
                 'raw': raw, 'weighted': weighted, 'distance': raw['d'], 'count': self.state['count'].copy(),
                 'held_once': self.state['held_once'].copy(), 'tracking_error_rad': float(result.tracking)}
-        self.q, self.p = q_next, p_next
+        self.p_prev = p
+        self.q, self.p, self.qd = q_next, p_next, (q_next - q) / self.dt
         self.t += 1
         return self.observe(), total, self.t >= self.horizon, info

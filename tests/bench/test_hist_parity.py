@@ -18,15 +18,13 @@ def test_parity_differences_reports_exactly_the_keys_that_differ():
     assert parity_differences(a, b) == ['extra', 'train.steps']
 
 
-def test_hist_contract_requires_decqn_with_the_original_reward(tmp_path):
+def test_hist_contract_requires_decqn_with_the_original_reward(tmp_path, capsys):
     os.environ['NATURAL_RL_RESULTS'] = str(tmp_path)
     try:
-        with pytest.raises(ValueError, match='hist_v1'):
-            main(['train', '--contract', 'hist_v1', '--model', 'sac', '--reward', 'r0_original', '--steps', '1600', '--run-id', 'x',
-                  '--checkpoint-every', '800', '--smoke'])
-        with pytest.raises(ValueError, match='hist_v1'):
-            main(['train', '--contract', 'hist_v1', '--model', 'decqn', '--reward', 'r1_hold', '--steps', '1600', '--run-id', 'x',
-                  '--checkpoint-every', '800', '--smoke'])
+        for model, reward in (('sac', 'r0_original'), ('decqn', 'r1_hold')):                 # refused cleanly (exit 2) with the reason
+            assert main(['train', '--contract', 'hist_v1', '--model', model, '--reward', reward, '--steps', '1600', '--run-id', 'x',
+                         '--checkpoint-every', '800', '--smoke']) == 2
+            assert 'hist_v1' in capsys.readouterr().err
     finally:
         os.environ.pop('NATURAL_RL_RESULTS', None)
 

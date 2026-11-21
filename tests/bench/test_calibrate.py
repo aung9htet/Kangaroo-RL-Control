@@ -1,4 +1,5 @@
 """Reward calibration: the locked formula, immutability of the locked register, and data provenance."""
+import re
 import shutil
 
 import numpy as np
@@ -30,6 +31,8 @@ def test_formula_uses_absolute_values_and_rejects_empty_pilot_data():
 def test_lock_writes_coefficients_and_provenance_then_refuses_a_second_lock(tmp_path):
     register = tmp_path / 'reward_v1.yaml'
     shutil.copy(ROOT + '/configs/rewards/reward_v1.yaml', register)
+    text = re.sub(r'^status: \w+', 'status: unlocked', register.read_text(), flags=re.M)             # the shipped register may be locked
+    register.write_text(re.sub(r'^    (time|path|speed|accel|rom): .*$', r'    \1: null', text, flags=re.M))
     lambdas = {'time': 1.5, 'path': 2.25, 'speed': 0.125, 'accel': 3.0, 'rom': 10.0}
     lock_register(register, lambdas, 1234, 'ab' * 32, 'cd' * 32, 'unit-test pilot')
     cfg = yaml.safe_load(register.read_text())
@@ -41,11 +44,18 @@ def test_lock_writes_coefficients_and_provenance_then_refuses_a_second_lock(tmp_
         lock_register(register, lambdas, 1, 'x', 'y', 'z')
 
 
-def test_the_shipped_register_is_unlocked_until_real_pilot_data_exists():
+def test_the_shipped_register_is_either_unlocked_and_empty_or_locked_with_complete_provenance():
     cfg = yaml.safe_load(open(ROOT + '/configs/rewards/reward_v1.yaml'))
-    assert cfg['status'] == 'unlocked' and all(v is None for v in cfg['calibration']['lambda'].values())
-    with pytest.raises(RewardNotLocked):
-        load_profile(cfg, 'r2_time')
+    lam = cfg['calibration']['lambda']
+    if cfg['status'] == 'unlocked':
+        assert all(v is None for v in lam.values())
+        with pytest.raises(RewardNotLocked):
+            load_profile(cfg, 'r2_time')
+    else:
+        data = cfg['calibration']['data']
+        assert cfg['status'] == 'locked' and all(v is not None and v > 0 for v in lam.values())
+        assert data['sha256'] and data['code_sha'] and data['n_episodes'] and data['locked_at']
+        assert load_profile(cfg, 'r7_balanced') is not None
 
 
 def test_data_hash_changes_when_any_pilot_value_changes():

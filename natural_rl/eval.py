@@ -16,7 +16,7 @@ import pandas as pd
 import yaml
 
 from .checkpoints import checkpoint_dir, read_index, step_name, tree_sha256
-from .env.reach_env import ReachBench
+from .env.factory import make_env
 from .env.tasks import load_manifest, task_arrays
 from .metrics.hks import SCALED_METRICS, r_hks, score_arrays
 from .metrics.kinematics import KinematicsConfig, savgol_derivatives, segment_kinematics
@@ -47,7 +47,7 @@ def eval_dir(run_dir, backend: str, suite: str, step: int) -> Path:
 def evaluate_checkpoint(run_dir, run_manifest: dict, scene, spec, profile, step: int, suite: str, backend: str = 'kinematic',
                         batch: int = 32, scalers='auto', max_tasks: int | None = None) -> dict:
     """Evaluate one checkpoint on every task of `suite` and write the three tables; returns the episode metrics frame."""
-    if backend not in ('kinematic', 'physics'):
+    if backend not in ('kinematic', 'dynamics', 'physics'):
         raise NotImplementedError(f'unknown backend {backend!r}; the two strata are never silently substituted for each other')
     run_dir = Path(run_dir)
     ckpt = checkpoint_dir(run_dir, step)
@@ -65,7 +65,7 @@ def evaluate_checkpoint(run_dir, run_manifest: dict, scene, spec, profile, step:
         from .env.physics import PhysicsBench
         env = PhysicsBench(scene, profile, spec, tasks, horizon=horizon)
     else:
-        env = ReachBench(scene, min(batch, n_tasks), profile, spec, tasks, horizon=horizon)
+        env = make_env(scene, min(batch, n_tasks), profile, spec, tasks, horizon=horizon, backend=backend)
     rows, events, frames = [], [], []
     dt = env.dt
     for begin in range(0, n_tasks, env.n):

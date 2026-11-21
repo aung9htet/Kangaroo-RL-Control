@@ -48,7 +48,7 @@ class BenchVecEnv(VecEnv):
         v = to_velocity(self.action_kind, self._actions, env.obs_spec.v_max)
         obs, reward, done, info = env.step(v)
         shared = {'q': info['q'], 'q_next': info['q_next'], 'p': info['p'], 'p_next': info['p_next'], 'v_cmd': v,
-                  'collided': info['collision_proposed'], 'clip': info['clip_proposed'], 'cost': info['cost'],
+                  'collided': info['collision_proposed'], 'clip': info['clip_proposed'], 'cost': info['cost'], 'qd_next': info['qd_next'],
                   'goal': env.goal.copy(), 't': env.t}
         infos = [{} for _ in range(self.num_envs)]
         infos[0]['batch_transition'] = shared
@@ -124,7 +124,7 @@ class GoalReplayBuffer(ReplayBuffer):
         if self.t == 0:
             self.replay.begin(batch['goal'])
         self.replay.add(self.t, batch['q'], batch['q_next'], batch['p'], batch['p_next'], batch['v_cmd'],
-                        np.asarray(action).reshape(len(batch['q']), -1), batch['collided'], batch['clip'])
+                        np.asarray(action).reshape(len(batch['q']), -1), batch['collided'], batch['clip'], batch['qd_next'])
         self.t += 1
         if self.t == self.replay.horizon:
             self.replay.end()

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,8 +19,8 @@ import yaml
 
 from .checkpoint_video import VideoRecorder, read_video_index, verify_run
 from .checkpoints import read_index, save_checkpoint, scheduled_steps, step_name
-from .env.contract import ObsSpec
-from .env.reach_env import ReachBench
+from .env.contract import DEFAULT_OBS, ObsSpec, backend_of
+from .env.factory import make_env
 from .env.tasks import load_manifest, task_arrays
 from .models.registry import ModelNotImplemented, train_model
 from .progress import Progress
@@ -128,9 +129,9 @@ class TrainContext:
         else:
             print(text, flush=True)
 
-    def make_env(self, n: int, seed: int | None = None) -> ReachBench:
-        return ReachBench(self.scene, n, self.profile, self.spec, self.tasks, horizon=self.horizon,
-                          seed=self.seed if seed is None else seed)
+    def make_env(self, n: int, seed: int | None = None):
+        return make_env(self.scene, n, self.profile, self.spec, self.tasks, horizon=self.horizon,
+                        seed=self.seed if seed is None else seed)
 
     def log_updates(self, step, updates, metrics: dict):
         self._updates.append({'transitions': int(step), 'updates': int(updates), 'wall_s': round(time.time() - self.start_time, 2),
@@ -194,48 +195,34 @@ def run_training(args) -> int:
     if args.steps % n_envs or (args.checkpoint_every and args.checkpoint_every % n_envs):
         raise ValueError(f'--steps ({args.steps}) and --checkpoint-every ({args.checkpoint_every}) must be multiples of '
                          f'n_envs = {n_envs} so that checkpoints land on exact transition counts')
-    backend = 'kinematic'
+    action_mode = getattr(args, 'action', None) or 'velocity'
+    if hist and action_mode != 'velocity':
+        raise ValueError('--contract hist_v1 is the historical velocity-control reproduction')
+    backend = backend_of(action_mode)
     out = run_dir(backend, args.model, args.reward, args.run_id, smoke)
-    if out.exists() and any(out.iterdir()):
-        previous = json.loads((out / 'manifest.json').read_text()) if (out / 'manifest.json').exists() else {}
-        if previous.get('status') == 'complete':
-            if (previous.get('steps'), previous.get('seed'), previous.get('reward'), previous.get('model')) != \
-                    (args.steps, args.seed, args.reward, args.model):
-                raise FileExistsError(f'{out} is a complete run with a different configuration (steps {previous.get("steps")}, seed '
-                                      f'{previous.get("seed")}); a run id names one configuration, use a new --run-id')
-            print(f'[skip] {args.run_id} is already complete (same model, reward, seed and steps): nothing to train, its results are kept')
-            return 0
-        if not args.restart:
-            raise FileExistsError(f'{out} holds an unfinished run (status {previous.get("status", "unknown")!r}); training cannot resume '
-                                  f'from a checkpoint. Pass --restart to move it aside to results/abandoned/ and train again from step 0')
-        archive = results_root(smoke) / 'abandoned' / f'{args.run_id}-{time.strftime("%Y%m%dT%H%M%S")}'
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        out.rename(archive)
-        print(f'[restart] unfinished run moved to {archive}')
-    out.mkdir(parents=True, exist_ok=False)
     steps = scheduled_steps(args.steps, args.checkpoint_every) if args.checkpoint_every else [args.steps]
     disk_preflight(results_root(smoke), len(steps) if args.record_every_checkpoint else 0)
-
-    provenance = run_provenance()
-    if provenance['rl']['dirty'] and not (args.allow_dirty or smoke):
-        raise RuntimeError('refusing to start a registered run on a dirty working tree: commit first, or pass '
-                           '--allow-dirty (such a run is recorded as dirty and excluded from main_v1)\n'
-                           + '\n'.join(provenance['rl']['dirty_files'][:10]))
+    if out.exists():
+        shutil.rmtree(out)                                           # a rerun of a run id replaces the previous run completely
+        print(f'[replace] {out} is replaced by this run')
+    provenance = run_provenance()                                    # records both commits and whether the tree was modified
+    out.mkdir(parents=True, exist_ok=True)
 
     exp = make_experiment(load_config(root / 'configs' / 'reach.yaml'))
     scene = exp.scene
-    obs_version = 'v1' if hist else 'v2'                            # the historical reproduction keeps the original q + g input
-    spec = ObsSpec(obs_version, scene.lower, scene.upper, exp.pool.lower, exp.pool.upper)
+    obs_version = 'v1' if hist else (getattr(args, 'obs', None) or DEFAULT_OBS[action_mode])    # the historical run keeps the original q + g input
+    spec = ObsSpec.for_scene(obs_version, scene, exp.pool, action_mode=action_mode)
     train_doc = load_manifest(suite_path(args.suite))
     manifest = {'run_id': args.run_id, 'model': args.model, 'reward': args.reward, 'contract': args.contract, 'obs_version': obs_version,
-                'backend': backend, 'train_backend': 'kinematic', 'seed': args.seed, 'steps': args.steps, 'suite': args.suite,
+                'action_mode': action_mode, 'backend': backend, 'train_backend': backend, 'seed': args.seed, 'steps': args.steps, 'suite': args.suite,
                 'suite_tasks_sha256': train_doc['tasks_sha256'], 'checkpoint_every': args.checkpoint_every,
                 'record_every_checkpoint': bool(args.record_every_checkpoint), 'cost_budget_id': args.cost_budget_id,
-                'smoke': smoke, 'allow_dirty': bool(args.allow_dirty), 'status': 'running', 'provenance': provenance,
+                'smoke': smoke, 'status': 'running', 'provenance': provenance,
                 'config_hashes': {'model': file_sha(f'configs/models/{args.model}.yaml'),
                                   'reward': file_sha('configs/rewards/reward_v1.yaml'),
                                   'metrics': file_sha('configs/metrics/metrics_v1.yaml'),
-                                  'train_manifest': train_doc['tasks_sha256']},
+                                  'train_manifest': train_doc['tasks_sha256'],
+                                  **({'dynamics': file_sha('configs/env/dynamics_v1.yaml')} if backend == 'dynamics' else {})},
                 'reward_register_status': rcfg.get('status')}
     write_json(out / 'manifest.json', manifest)
     (out / 'config_resolved.yaml').write_text(yaml.safe_dump({'model': mcfg, 'reward_profile': args.reward,
@@ -255,8 +242,9 @@ def run_training(args) -> int:
         if args.cost_budget_id is None:
             raise ValueError('sac_pidlag needs --cost-budget-id (budget_moderate_v1 or budget_strict_v1)')
         ctx.cost_budget = PIDLagrangian.from_yaml(budgets_config(), args.cost_budget_id)
-    ctx.progress = Progress(args.model, args.run_id, args.reward, args.seed, args.steps, len(steps))
-    ctx.progress.log(f'[start] {args.model} | {args.run_id} | reward {args.reward} | seed {args.seed} | {args.steps:,} transitions | '
+    ctx.progress = Progress(args.model, args.run_id, args.reward, args.seed, args.steps, len(steps), out_dir=out,
+                            cell=f'{action_mode}/{obs_version}')
+    ctx.progress.log(f'[start] {args.model} | {args.run_id} | reward {args.reward} | action {action_mode} | state obs_{obs_version} | seed {args.seed} | {args.steps:,} transitions | '
                      f'{len(steps)} checkpoints{" with raw videos" if args.record_every_checkpoint else ""}')
     ctx.clock = Clock(ctx)
     status, error = 'complete', None

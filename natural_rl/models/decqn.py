@@ -205,7 +205,7 @@ def train(ctx, growing: bool = False) -> None:
         v = multidiscrete_to_velocity(actions, ctx.spec.v_max)
         obs, _, done, info = env.step(v)
         replay.add(env.t - 1, info['q'], info['q_next'], info['p'], info['p_next'], v, actions,
-                   info['collision_proposed'], info['clip_proposed'])
+                   info['collision_proposed'], info['clip_proposed'], info['qd_next'])
         step += n
         if done:
             replay.end()

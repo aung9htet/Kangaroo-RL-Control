@@ -28,12 +28,12 @@ def _shift_back(array, fill):
 
 class GoalReplay:
     def __init__(self, capacity: int, horizon: int, n_joints: int, action_dim: int, action_dtype, profile: RewardProfile,
-                 obs_spec: ObsSpec, lower, upper, her_ratio=0.8, n_step=1, gamma=0.95, seed=0):
+                 obs_spec: ObsSpec, lower, upper, her_ratio=0.8, n_step=1, gamma=0.95, seed=0, dt=0.05):
         self.horizon, self.n_joints = horizon, n_joints
         self.episodes = max(1, capacity // horizon)
         self.profile, self.obs_spec = profile, obs_spec
         self.lower, self.upper = np.asarray(lower), np.asarray(upper)
-        self.her_ratio, self.n_step, self.gamma = her_ratio, n_step, gamma
+        self.her_ratio, self.n_step, self.gamma, self.dt = her_ratio, n_step, gamma, dt
         self.rng = np.random.default_rng(seed)
         e, h, j = self.episodes, horizon, n_joints
         self.q = np.zeros((e, h, j), dtype=np.float32)          # joints before the decision
@@ -41,6 +41,7 @@ class GoalReplay:
         self.p = np.zeros((e, h, 3))                            # end effector before / after (float64: exact tolerance tests)
         self.p_next = np.zeros((e, h, 3))
         self.v_cmd = np.zeros((e, h, j), dtype=np.float32)      # commanded velocity, rad/s
+        self.qd_next = np.zeros((e, h, j), dtype=np.float32)    # executed joint velocity after the decision (obs_v3 input)
         self.action = np.zeros((e, h, action_dim), dtype=action_dtype)
         self.collided = np.zeros((e, h), dtype=bool)
         self.clip = np.zeros((e, h), dtype=bool)
@@ -60,8 +61,9 @@ class GoalReplay:
         self.complete[self.slots] = False
         self.goal[self.slots] = goals
 
-    def add(self, t, q, q_next, p, p_next, v_cmd, action, collided, clip):
+    def add(self, t, q, q_next, p, p_next, v_cmd, action, collided, clip, qd_next=None):
         s = self.slots
+        self.qd_next[s, t] = (np.asarray(q_next) - np.asarray(q)) / self.dt if qd_next is None else qd_next
         self.q[s, t], self.q_next[s, t], self.p[s, t], self.p_next[s, t] = q, q_next, p, p_next
         self.v_cmd[s, t], self.action[s, t], self.collided[s, t], self.clip[s, t] = v_cmd, action, collided, clip
 
@@ -75,14 +77,17 @@ class GoalReplay:
                              self.lower, self.upper, self.profile.config)
 
     def observations(self, e, t, goal, hist=None):
-        """obs_v2 of episode e BEFORE decision t, recomputed for `goal` (count, held-once and previous command included)."""
+        """the observation of episode e BEFORE decision t, recomputed for `goal` (count, held-once, previous command and, for obs_v3, the executed joint velocity)."""
         hist = self._history(e, goal) if hist is None else hist
         b = np.arange(len(e))
         q = np.where((t == 0)[:, None], self._q0(e), self.q_next[e, np.maximum(t - 1, 0)])
         count = _shift_back(hist['count'], 0)[b, t]
         held = _shift_back(hist['held_once'], False)[b, t]
         v_prev = hist['v_prev'][b, t]
-        return self.obs_spec.encode(q, goal, v_prev, count, held)
+        qd = np.where((t == 0)[:, None], 0.0, self.qd_next[e, np.maximum(t - 1, 0)])      # episodes start at rest
+        p = self.p[e, t]                                                                   # hand position before decision t
+        p_prev = self.p[e, np.maximum(t - 1, 0)]                                           # one decision earlier (equal at t = 0: at rest)
+        return self.obs_spec.encode(q, goal, v_prev, count, held, qd, p=p, p_prev=p_prev, step=t)
 
     def _q0(self, e):
         return self.q[e, 0]
@@ -113,7 +118,8 @@ class GoalReplay:
         q_end = self.q_next[e, last]
         # features after decision `last`: the command just issued becomes the next observation's previous command
         next_obs = self.obs_spec.encode(q_end, goal, self.v_cmd[e, last], hist['count'][b, last],
-                                        hist['held_once'][b, last])
+                                        hist['held_once'][b, last], self.qd_next[e, last],
+                                        p=self.p_next[e, last], p_prev=self.p[e, last], step=last + 1)
         return {'obs': self.observations(e, t, goal, hist), 'action': self.action[e, t], 'next_obs': next_obs,
                 'reward': ret.astype(np.float32), 'cost': cost.astype(np.float32),
                 'discount': (self.gamma ** steps).astype(np.float32), 'goal': goal.astype(np.float32),

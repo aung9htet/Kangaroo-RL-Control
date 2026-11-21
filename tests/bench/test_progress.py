@@ -82,7 +82,7 @@ def test_every_printed_line_of_the_whole_programme_parses_with_the_real_cli(caps
         assert main(['catalog', 'programme', '--phase', phase, '--with-eval']) == 0
     out = capsys.readouterr().out
     lines = [l for l in out.splitlines() if l.startswith('python -m natural_rl')]
-    assert len(lines) == 3 * 2 + 60 * 3 + 100 * 5 + 10 * 5
+    assert len(lines) == 3 * 2 + 1440 * 3 + 2400 * 5 + 10 * 5                  # every cell of the action x state grid
     parser = build_parser()
     for line in lines:
         args, extra = parser.parse_known_args(line.split()[3:])

@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from .checkpoints import checkpoint_dir, read_index, set_video_status, step_name, tree_sha256
-from .env.reach_env import ReachBench
+from .env.factory import make_env
 from .models.registry import load_policy
 from .rollout import rollout
 from .video import file_sha256, verify_ffv1, write_ffv1, write_json, write_preview
@@ -70,7 +70,7 @@ class VideoRecorder:
         self.task_id = video_cfg['task_id']
         self.index = val_tasks['task_id'].index(self.task_id)
         self.task = next(t for t in val_doc['tasks'] if t['task_id'] == self.task_id)
-        self.env = ReachBench(scene, 1, profile, spec, val_tasks, horizon=int(self.task['horizon_decisions']))
+        self.env = make_env(scene, 1, profile, spec, val_tasks, horizon=int(self.task['horizon_decisions']))
         self.renderer = RawRenderer(scene, render_cfg)
 
     def record(self, step: int, force: bool = False) -> dict:
@@ -159,7 +159,7 @@ class VideoRecorder:
         k = np.arange(n + 1)
         frame = pd.DataFrame({
             'k': k, 't_s': k * roll['dt'], 'joint_angles_rad': list(roll['q'][0]), 'end_effector_xyz_m': list(roll['ee'][0]),
-            'goal_xyz_m': [list(roll['goal'][0])] * (n + 1), 'coordinate_frame': 'robot0_base_link', 'backend': 'kinematic'})
+            'goal_xyz_m': [list(roll['goal'][0])] * (n + 1), 'coordinate_frame': 'robot0_base_link', 'backend': self.spec.backend})
         decisions = pd.DataFrame({
             'k': k[1:], 'q_cmd_rad_s': list(roll['v_cmd'][0]), 'q_exec_rad_s': list(roll['v_exec'][0]),
             'collision_proposed': roll['collision_proposed'][0], 'clip_proposed': roll['clip_proposed'][0],
