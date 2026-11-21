@@ -1,0 +1,45 @@
+# Interactive benchmark container. Nothing runs automatically: you land in Bash and launch
+# training, evaluation, analysis and figures yourself with `python -m natural_rl ...`.
+#
+#   docker info
+#   docker compose build rl
+#   docker compose run --rm rl bash
+#
+# Defaults are CPU-only (software rendering). For the GPU see compose.gpu.yaml and .env.example.
+# Host paths for results/ and data/ must exist (they are bind-mounted so that checkpoints, videos
+# and tables survive the container); Compose will not silently create root-owned directories.
+services:
+  rl:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.natural
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-aung9htet/kangaroo-libero:0.1.0-ubuntu-22.04}
+    image: kangaroo-natural-rl:0.3.0
+    init: true
+    tty: true
+    stdin_open: true
+    shm_size: 1g
+    command: bash
+    environment:
+      LOCAL_USER_ID: ${HOST_UID:-1000}
+      LOCAL_GROUP_ID: ${HOST_GID:-1000}
+      MUJOCO_GL: ${MUJOCO_GL:-osmesa}
+      MPLBACKEND: Agg
+      NATURAL_RL_IMAGE_REF: kangaroo-natural-rl:0.3.0
+      PYTHONHASHSEED: "0"
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-4}
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/Kangaroo-RL-Control
+      - type: bind
+        source: ${RESULTS_DIR:-./results}
+        target: /workspace/Kangaroo-RL-Control/results
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DATA_DIR:-./data}
+        target: /workspace/Kangaroo-RL-Control/data
+        bind:
+          create_host_path: false

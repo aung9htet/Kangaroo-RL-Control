@@ -1,0 +1,19 @@
+# Expected-cost budgets for the SAC-PID-Lagrangian configuration (an adaptation of SAC, Haarnoja et al.
+# 2018, with the PID Lagrangian update of Stooke, Achiam and Abbeel 2020).
+#
+# cost per decision = collision_attempt + preclip_joint_limit_attempt   (unsafe proposal events)
+# episodic cost     = sum over the 100 decisions of an episode
+# The budget bounds the EXPECTED episodic cost. It is not a per-episode or zero-event guarantee;
+# raw unsafe counts and the budget-violation frequency are reported next to every constrained result.
+version: budgets_v1
+unit: expected unsafe proposal events per 100-decision episode
+budgets:
+  budget_moderate_v1: {limit: 0.50}   # default for P1/P2 sac_pidlag runs
+  budget_strict_v1:   {limit: 0.10}
+pid:                                  # Stooke et al. 2020 PID on the episodic cost; registered starting values,
+  kp: 0.1                             # checked against the paper's guidance at M4 and then frozen
+  ki: 0.01
+  kd: 0.01
+  lambda_init: 0.0
+  lambda_max: 100.0
+  ema_alpha: 0.05                     # smoothing of the episodic cost estimate used by the P and D terms

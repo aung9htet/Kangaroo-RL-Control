@@ -1,0 +1,22 @@
+# The one canonical video task recorded for EVERY saved checkpoint of EVERY run.
+# Validation split only: test episodes never choose or select checkpoints.
+version: checkpoint_video_v1
+task_id: val_001
+split: val_v1
+evaluation_seed: 20261121
+deterministic_policy: true          # no exploration noise; TD-MPC2 planner RNG is seeded with evaluation_seed
+camera: canonical_v1                # configs/render/canonical_v1.yaml
+width: 640
+height: 480
+fps: 20                             # one frame at t = 0 and one after every 0.05 s decision
+frames_per_decision: 1
+include_rejected_and_still_frames: true
+codec: ffv1
+pixel_format: bgr0                  # 8-bit RGB reordered to BGR + 1 padding byte: reversible; decoded frames are compared bit-for-bit (FFV1 here has no 8-bit gbrp)
+container: mkv
+preview: {enabled: true, file: preview.mp4, note: "labelled viewing copy, never the record"}
+schedule:
+  step_zero: true
+  every_transitions: 50000
+  final: true
+  manual: true

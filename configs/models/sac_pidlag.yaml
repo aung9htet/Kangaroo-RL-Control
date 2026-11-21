@@ -1,0 +1,25 @@
+id: sac_pidlag
+name: SAC with PID-Lagrangian cost budgets
+family: constrained continuous off-policy
+action_space: "Box[-1,1]^7: v = v_max * clip(a, -1, 1)"
+paper:
+  authors: "SAC: Haarnoja, T. et al. | PID Lagrangian: Stooke, A., Achiam, J. and Abbeel, P."
+  title: "Soft Actor-Critic (ICML 2018, PMLR 80) | Responsive Safety in Reinforcement Learning by PID Lagrangian Methods (ICML 2020, PMLR 119)"
+  venue: "adaptation of the two cited methods; not attributed to either paper alone"
+  url: "https://proceedings.mlr.press/v80/haarnoja18b.html | https://proceedings.mlr.press/v119/stooke20a.html"
+implementation: "natural_rl.models.sac_pidlag: SB3 SAC subclass + cost critic + PID-updated multiplier on the episodic unsafe-proposal cost"
+off_policy: true
+goal_relabelling: {enabled: true, strategy: future, ratio: 0.8}
+n_envs: 16
+hyper:                                   # SAC values unchanged; budgets and PID gains in configs/costs/budgets_v1.yaml
+  gamma: 0.95
+  lr: 3.0e-4
+  batch: 256
+  tau: 0.005
+  learning_starts: 10000
+  replay: 1000000
+  her_ratio: 0.8
+  n_step: 1
+  utd: 1
+  net_arch: [256, 256]
+  ent_coef: auto

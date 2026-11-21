@@ -1,0 +1,20 @@
+id: ppo_md
+name: PPO (MultiDiscrete)
+family: on-policy
+action_space: "MultiDiscrete([7]*7): native seven 7-bin outputs {-1,-0.3,-0.1,0,0.1,0.3,1}, v = v_max * level"
+paper: {authors: "Schulman, J. et al.", title: "Proximal Policy Optimization Algorithms", venue: "arXiv:1707.06347 (2017)", url: "https://arxiv.org/abs/1707.06347"}
+implementation: "stable-baselines3 2.7.1 PPO"
+off_policy: false
+goal_relabelling: {enabled: false, note: "on-policy: no replay, hence no relabelling"}
+n_envs: 16
+# ppo_md and ppo_box share EVERY value below; only the action distribution differs, so their contrast isolates action representation.
+hyper: &ppo
+  gamma: 0.95
+  gae_lambda: 0.95
+  lr: 3.0e-4
+  n_steps: 256            # per environment (4096 transitions per update with 16 environments)
+  batch_size: 256
+  n_epochs: 10
+  clip_range: 0.2
+  ent_coef: 0.0
+  net_arch: {pi: [256, 256], vf: [256, 256]}

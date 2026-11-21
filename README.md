@@ -1,168 +1,829 @@
 # Kangaroo-RL-Control
 
-Reinforcement learning for the PAL Kangaroo in LIBERO: an object appears on the table and the robot's right
-arm (7 joints) reaches for it. The goal is the place where the object appeared, so where the robot is
-reaching is always known, and a new object position is just a new goal for the same policy (retargeting).
+Reinforcement learning for the PAL Kangaroo right arm (7 joints) in LIBERO/MuJoCo: reach the place where an object appears and stay
+there. The repository has two parts.
 
-- **State:** sin/cos positional encoding of the 7 joint angles, plus the goal.
-- **Action:** one of 7 velocities per joint.
-- **Learning:** goal-conditioned, factored Q-learning with hindsight relabelling, trained on an exact MuJoCo
-  model of the arm.
-- **Evaluation:** in the Kangaroo_Libero physics simulator.
+* **`natural_rl`**, a code-only benchmark of ten RL controllers and twelve reward profiles. It compares the *kinematics* of the executed
+  reaching movements (smoothness, timing, directness, pauses), not only whether the goal is reached, with a declared proxy score
+  (HKS). Everything is launched by hand from a Docker shell, and every saved training checkpoint also yields a lossless, unedited
+  raw video.
+* **`kangaroo_rl`**, the original single-experiment code (goal-conditioned DecQN with hindsight relabelling), reused by the benchmark as
+  its baseline.
 
-![retargeting in the simulator](docs/results/figures/retarget_sequence.gif)
+HKS measures resemblance to a few simple point-to-point reaching priors (one smooth speed peak, minimum-jerk timing, a straight path, no
+pauses or reversals). It is a computational proxy, not a validated measure of perceived naturalness. "Speed effort" and "range margin"
+are command/geometry proxies, not energy or joint stress.
 
-This page is the run manual: how to set up, test, train, evaluate and redraw everything. The last section
-says where everything is.
+**Contents**
+1. [Quick start](#1-quick-start) · 2. [The problem](#2-the-problem-state-action-transition-reward) · 3. [The ten controllers](#3-the-ten-controllers)
+· 4. [Reward profiles and cost budgets](#4-reward-profiles-and-cost-budgets) · 5. [Metrics, HKS and statistics](#5-metrics-hks-and-statistics)
+· 6. [Tasks and evaluation](#6-tasks-and-evaluation) · 7. [Training programme](#7-training-programme) · 8. [Checkpoints, videos and results](#8-checkpoints-videos-and-results)
+· 9. [Tests](#9-tests) · 10. [Repository layout](#10-repository-layout) · 11. [Original experiment](#11-the-original-experiment)
 
-- The model, the transition rule and the Bellman equation, with derivations: [`TECHNICAL.md`](TECHNICAL.md)
-- What came out, and how accuracy changes with training: [`docs/results.md`](docs/results.md)
-- How the code is organised: [`docs/architecture.md`](docs/architecture.md)
-- The tests and their pass marks: [`docs/tests.md`](docs/tests.md)
-- How this repository and Kangaroo_Libero fit together: [`docs/integration.md`](docs/integration.md)
+---
 
-## 1. Setup
+## 1. Quick start
 
-You need:
-- a Linux amd64 host
-- Docker Engine accessible without sudo
-- the simulator image `aung9htet/kangaroo-libero:0.1.0-ubuntu-22.04`, pulled (private, ask the owner) or
-  built from `sim/Kangaroo_Libero`
-
-An NVIDIA GPU with the Container Toolkit is used for rendering and training when available; everything also
-runs on the CPU (`--software`).
+On the host (once): `git submodule update --init` (the simulator, pinned at `c7be874`) and `docker login` with an account that can pull the
+private image `aung9htet/kangaroo-libero:0.1.0-ubuntu-22.04`. Then:
 
 ```bash
-git clone --recursive git@github.com-personal:aung9htet/Kangaroo-RL-Control.git
-cd Kangaroo-RL-Control
-./run_rl_docker.bash --build --headless -- python -c "import torch, kangaroo_libero; print(torch.__version__)"
+docker info
+docker compose build rl
+docker compose run --rm rl bash        # lands in /workspace/Kangaroo-RL-Control as your user; nothing starts by itself
 ```
 
-`--build` makes the image `kangaroo-rl:0.1.0`: the simulator image plus PyTorch 2.5.1 (about 5 GB more). It is
-needed once, and again when `docker/` changes. The simulator code that runs is the pinned submodule
-`sim/Kangaroo_Libero` (run `git submodule update --init` for a clone made without `--recursive`).
-
-| Launcher option | Effect |
-| --- | --- |
-| `--headless` | no display; MuJoCo renders offscreen (EGL on NVIDIA, OSMesa otherwise) |
-| `--software` | Mesa rendering and CPU compute |
-| `--gpu nvidia` | require the GPU |
-| `--name NAME` | name the container, for `docker exec -it NAME bash` |
-| `-- CMD` | run CMD instead of an interactive shell |
-
-All commands below run inside the container, from the repository root. Prefix them with
-`./run_rl_docker.bash --headless --` to run them from the host.
-
-**GPU after suspend.** If `torch.cuda.is_available()` is False after the laptop has slept (`cuInit` error
-999 on the host too), reload the NVIDIA unified-memory module once:
-`sudo rmmod nvidia_uvm && sudo modprobe nvidia_uvm`. Training falls back to the CPU on its own; the
-results in `docs/results.md` were produced on the CPU.
-
-## 2. Test
+Inside the container:
 
 ```bash
-python -m pytest -q                 # all tests, about 30 s: encoding, MDP, agent, replay, DP and simulator tests
-python -m pytest -q -m "not sim"    # only the fast tests (no LIBERO scene)
+python -m natural_rl verify-env --suite train_v1        # libraries, simulator, manifests, scene, rendering, FFV1, disk
+python -m natural_rl catalog models
+python -m natural_rl catalog rewards
+python -m natural_rl catalog suites
+python -m natural_rl catalog programme --phase P2 --commands   # every registered train command of a phase
 ```
 
-What each test checks and its pass mark: [`docs/tests.md`](docs/tests.md).
+`results/` and `data/` are bind-mounted from the host and survive the container. Copy `.env.example` to `.env` to change the host paths
+(`RESULTS_DIR`), the thread count or the user ids.
 
-## 3. Measure the robot
+**GPU.** With the NVIDIA Container Toolkit's CDI spec on the host (`/var/run/cdi/nvidia.yaml` or `/etc/cdi/nvidia.yaml`; no Docker runtime
+or daemon restart is needed), uncomment `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in `.env`. Inside the container
+`torch.cuda.is_available()` is then true, `train ... --device cuda` runs any controller on CUDA, and `MUJOCO_GL=egl` renders raw video
+frames on the GPU (about 1 ms per frame instead of about 200 ms on CPU). EGL and software (osmesa) rendering give slightly different
+pixels and the backend is recorded in every video manifest, so use one rendering backend for a whole benchmark. TD-MPC2 uses CUDA by default
+when it is available; the other controllers default to CPU.
 
-```bash
-python scripts/probe_model.py
-```
+**Image** `kangaroo-natural-rl:0.3.0`: Python 3.10, torch 2.7.1 (cu126), stable-baselines3 and sb3-contrib 2.7.1, tensordict 0.8.3, PyAV 13.1.0
+(FFV1), ffmpeg, on top of the simulator image (numpy 1.26.4, gym 0.25.2, mujoco 3.4.0).
 
-This writes `docs/results/probe.json` and two figures:
-- `workspace.png`: the reach envelope against the table, for the stock and the chosen robot placement
-- `step_response.png`: simulator tracking per joint
+---
 
-It also prints the joint limits, actuator kinds and gains, and the cost of the collision test.
+## 2. The problem: state, action, transition, reward
 
-## 4. Train
+The controlled chain has 7 joints (5 arm joints and the 2 wrist joints of the RH8D hand). The *reach point* $p(q)\in\mathbb R^3$ is the hand's
+manipulation link in the robot base frame ($x$ forward, $y$ left, $z$ up, metres). A goal $g\in\mathbb R^3$ is a point above the table.
 
-```bash
-python -m kangaroo_rl.train --config configs/reach.yaml --seed 0
-```
+**State.** The joint angles and the goal, $s_t=(q_t,\,g)$ with $q_t\in\mathbb R^7$ (rad). Each joint is normalised to $[-1,1]$ over its range and
+every normalised value $x$ is encoded with a sinusoidal positional encoding of $L=4$ frequencies:
 
-| Config | What it trains | Steps |
+$$
+\tilde q_j=2\,\frac{q_j-q_j^{\min}}{q_j^{\max}-q_j^{\min}}-1,\qquad
+\phi(x)=\big[\,x,\ \sin(2^{0}\pi x),\cos(2^{0}\pi x),\ \dots,\ \sin(2^{3}\pi x),\cos(2^{3}\pi x)\,\big].
+$$
+
+The goal is part of the state so a single policy serves every goal. Two observation vectors are used:
+
+| Name | Content | Size |
 | --- | --- | --- |
-| `configs/reach.yaml` | the main experiment: 7 joints, sin/cos encoding, hindsight relabelling | 1 M |
-| `configs/reach_raw.yaml` | comparison: raw normalised joint angles instead of sin/cos | 500 k |
-| `configs/reach_noher.yaml` | comparison: no hindsight relabelling | 500 k |
-| `configs/slice2.yaml` | 2 joints on a lattice, for the exact Bellman check | 300 k |
+| `obs_v1` (historical reproduction only) | $\phi(\tilde q)\,\Vert\,\phi(\tilde g)$ | $63+27=90$ |
+| `obs_v2` (every benchmark run) | $\phi(\tilde q)\,\Vert\,\phi(\tilde g)\,\Vert\,v_{t-1}/v_{\max}\,\Vert\,\min(c_t,5)/5\,\Vert\,h_t$ | $90+7+1+1=99$ |
 
-A run writes `runs/<name>/seed<k>/`:
+In `obs_v2`, $v_{t-1}$ is the previous command, $c_t$ the number of consecutive accepted positions within 2 cm of the goal (the *dwell counter*)
+and $h_t\in\{0,1\}$ whether a 5-step hold has already been completed. They make the hold-aware rewards Markov.
 
-| File | Contents |
+**Action.** Seven joint-velocity commands bounded by $v_{\max}=1$ rad/s, applied for one decision of $\Delta t=0.05$ s (20 Hz):
+
+* *Discrete controllers* choose one bin per joint: $v_j=v_{\max}\,b_{k_j}$ with $b=(-1,-0.3,-0.1,0,0.1,0.3,1)$ and $k_j\in\{0,\dots,6\}$,
+  i.e. $7^7=823{,}543$ joint actions.
+* *Continuous controllers* output $a\in[-1,1]^7$ with $v=v_{\max}\operatorname{clip}(a,-1,1)$.
+
+**Transition.** The commanded velocity is integrated for one decision and clipped to the joint limits; if the arm at the clipped pose
+penetrates the table or the robot, the whole move is rejected:
+
+$$
+\hat q=\operatorname{clip}\!\big(q+\Delta t\,v,\ q^{\min},q^{\max}\big),\qquad
+q'=\begin{cases}q & \text{if the arm at }\hat q\text{ collides (move rejected, collision flag }c=1)\\ \hat q & \text{otherwise.}\end{cases}
+$$
+
+The goal never changes within an episode. Collisions are tested with MuJoCo on a filtered copy of the compiled model (right arm against the
+table and the rest of the robot). Joint clipping and collision rejection are always active, under every reward profile.
+
+**Episode and objective.** An episode has $H=100$ decisions (5 s). There are no terminal states: the time limit is a *truncation*, so
+bootstrapping continues from the true final state. All controllers maximise the discounted return with $\gamma=0.95$:
+
+$$
+J(\pi)=\mathbb E_\pi\Big[\sum_{t=0}^{H-1}\gamma^{t}\,r_t\Big].
+$$
+
+**Hindsight goal relabelling** (used by every off-policy controller). An episode that misses its goal still shows how to reach every point the
+hand passed through. With probability 0.8 a sampled transition gets the goal replaced by a position reached later in the same episode:
+
+$$
+\tilde g=p(q_{t'}),\quad t'\sim\mathcal U\{t,\dots,H-1\},\qquad \tilde r_i=r(\,\cdot\,;\tilde g\,)\ \text{recomputed}.
+$$
+
+This is valid because the transition $(q',c)$ does not depend on the goal; only the reward does, so rewards are never stored. Because the
+rewards and observations contain *history*, relabelling recomputes them from step 0 of the episode for the new goal:
+
+$$
+d_t=\lVert p_{t}-\tilde g\rVert,\quad c_t=(c_{t-1}+1)\,\mathbb 1[d_t\le 0.02\,\mathrm m],\quad h_t=\mathbb 1\big[\max_{s\le t}c_s\ge 5\big],
+$$
+
+and the $n$-step return used by the value-based methods is $R_t^{(m)}=\sum_{i=0}^{m-1}\gamma^{i}\tilde r_{t+i}$ with $m=\min(n,H-t)$, bootstrapping
+with $\gamma^{m}$.
+
+---
+
+## 3. The ten controllers
+
+All ten act on the problem above: they observe `obs_v2`, command seven joint velocities, and are trained and evaluated on identical task
+manifests, actuator limits, safety rules and evaluation code.
+
+| ID | Family | Action | Learns | Exploration | Goal relabelling |
+| --- | --- | --- | --- | --- | --- |
+| `decqn` | value-based, factored | 7 bins x 7 joints | decoupled Q | per-joint $\varepsilon$-greedy | yes |
+| `growing_q` | value-based, factored | 2→3→5→7 bins x 7 joints | decoupled Q with masking | per-joint $\varepsilon$-greedy on active bins | yes |
+| `ppo_md` | on-policy actor-critic | 7 bins x 7 joints | categorical policy | policy sampling | no |
+| `ppo_box` | on-policy actor-critic | Box $[-1,1]^7$ | Gaussian policy | policy sampling | no |
+| `sac` | off-policy actor-critic | Box | max-entropy policy | stochastic policy | yes |
+| `td3` | off-policy actor-critic | Box | deterministic policy | Gaussian noise | yes |
+| `tqc` | off-policy actor-critic | Box | distributional critics | stochastic policy | yes |
+| `crossq` | off-policy actor-critic | Box | batch-normalised critics | stochastic policy | yes |
+| `tdmpc2` | model-based | Box | latent world model + planning | planner noise | yes |
+| `sac_pidlag` | constrained off-policy | Box | SAC + cost critic | stochastic policy | yes |
+
+Contrasts that can be interpreted: DecQN vs Growing Q vs PPO-MD (discrete stacks); PPO-MD vs PPO-Box (action representation inside PPO,
+identical settings otherwise); the continuous family PPO-Box / SAC / TD3 / TQC / CrossQ / TD-MPC2; SAC vs SAC-PID-Lagrangian (cost-budget
+training). Controllers are policy *stacks*, not single-factor changes. Registered hyperparameters live in `configs/models/<id>.yaml`.
+Every block below ends with the eleven commands for that controller (shown for `r7_balanced`, seed 0; `catalog programme --commands`
+prints the whole registered programme).
+
+### decqn: DecQN
+
+*Seyde et al., Solving Continuous Control via Q-learning, ICLR 2023.* https://arxiv.org/abs/2210.12566
+
+**What it does.** A value-based method for many action dimensions. A full joint action has $7^7$ combinations, far too many to evaluate, so the
+Q-function is *decoupled*: the network outputs one utility per joint and per bin and the value of a joint action is their mean. The best joint
+action is then simply the best bin of every joint, found with $7\times7$ evaluations and exactly equal to the arg-max over all $7^7$ actions.
+
+**Network.** `obs_v2` (99) → 256 → 256 (LayerNorm, ReLU) → 49 utilities $U_j(s,k)$.
+
+$$
+Q_\theta(s,a)=\frac1J\sum_{j=1}^{J}U_j(s,a_j;\theta),\qquad a^*_j=\arg\max_k U_j(s,k;\theta).
+$$
+
+**Learning.** Double-Q with $n=3$-step returns from the relabelled replay, Huber loss on the joint action actually taken, Polyak-averaged target
+network ($\tau=0.005$), gradient clipping at 10, Adam $3\times10^{-4}$, batch 256, targets clipped to the reward bounds divided by $1-\gamma$:
+
+$$
+y=\sum_{i=0}^{m-1}\gamma^{i}\tilde r_{t+i}+\gamma^{m}\,Q_{\theta^-}\!\big(s_{t+m},\hat a\big),\quad \hat a_j=\arg\max_k U_j(s_{t+m},k;\theta),
+\qquad \mathcal L(\theta)=\operatorname{Huber}\!\big(y-Q_\theta(s_t,a_t)\big).
+$$
+
+**Exploration.** Per joint, $\varepsilon$ falls linearly from 1 to 0.02 over the first 15 % of training; an exploring joint repeats one random
+bin for 1-10 decisions so random motion travels instead of jittering. 16 environments run in parallel, with 4 gradient updates per 16 transitions
+and 10,000 random warm-up transitions.
+
+Registered settings: `configs/models/decqn.yaml`.
+
+```bash
+python -m natural_rl train --model decqn --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id decqn-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id decqn-r7-s00
+python -m natural_rl play --run-id decqn-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id decqn-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id decqn-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id decqn-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id decqn-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id decqn-r7-s00
+python -m natural_rl plot --run-id decqn-r7-s00 --kind all
+python -m natural_rl export --run-id decqn-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id decqn-r7-s00
+```
+
+
+### growing_q: Growing Q-Networks
+
+*Seyde et al., Growing Q-networks: Solving continuous control tasks with adaptive control resolution, L4DC 2024.* https://proceedings.mlr.press/v242/seyde24a.html
+
+**What it does.** DecQN that starts with a very coarse action set and refines it during training. Coarse control (bang-bang) explores quickly and
+is easy to learn; fine control is needed later for precision. The network always has all seven bins, but only an *active subset*
+$\mathcal A_g\subseteq\{0,\dots,6\}$ may be chosen: masking is applied to the greedy action, to the epsilon-greedy exploration and to the maximum
+in the Double-Q target:
+
+$$
+\hat a_j=\arg\max_{k\in\mathcal A_g}U_j(s_{t+m},k;\theta),\qquad
+y=\sum_{i<m}\gamma^{i}\tilde r_{t+i}+\gamma^{m}\,\frac1J\sum_{j}U_j(s_{t+m},\hat a_j;\theta^-).
+$$
+
+**Schedule.** The paper's linear schedule on nested subsets of the seven historical levels, growing at 20 %, 40 % and 60 % of training:
+
+| Stage | Active velocities (rad/s) | Bins |
+| --- | --- | --- |
+| 0 | $\{-1,+1\}$ | 2 |
+| 1 | $\{-1,0,+1\}$ | 3 |
+| 2 | $\{-1,-0.3,0,0.3,1\}$ | 5 |
+| 3 | all seven | 7 |
+
+The active set is saved inside every checkpoint (a replay acts at the resolution the checkpoint had) and the active resolution is logged at
+every decision. All other settings equal DecQN.
+
+Registered settings: `configs/models/growing_q.yaml`.
+
+```bash
+python -m natural_rl train --model growing_q --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id growing_q-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id growing_q-r7-s00
+python -m natural_rl play --run-id growing_q-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id growing_q-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id growing_q-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id growing_q-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id growing_q-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id growing_q-r7-s00
+python -m natural_rl plot --run-id growing_q-r7-s00 --kind all
+python -m natural_rl export --run-id growing_q-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id growing_q-r7-s00
+```
+
+
+### ppo_md: PPO with MultiDiscrete actions
+
+*Schulman et al., Proximal Policy Optimization Algorithms, 2017.* https://arxiv.org/abs/1707.06347
+
+**What it does.** An on-policy actor-critic. It collects fresh rollouts with the current policy and improves it with a clipped surrogate objective that
+keeps each update close to the policy that gathered the data. No replay buffer, so no goal relabelling.
+
+**Policy.** Seven independent categorical distributions over the 7 bins (one per joint), $\pi_\theta(a\mid s)=\prod_{j}\operatorname{Cat}(a_j;\operatorname{softmax}\ell_j(s))$,
+and a separate value network $V_\psi(s)$; both are MLPs with two layers of 256.
+
+$$
+\mathcal L^{\text{CLIP}}=\mathbb E_t\Big[\min\big(\rho_t\hat A_t,\ \operatorname{clip}(\rho_t,1-\epsilon,1+\epsilon)\,\hat A_t\big)\Big],\qquad
+\rho_t=\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\text{old}}}(a_t\mid s_t)},
+$$
+
+$$
+\hat A_t=\sum_{l\ge0}(\gamma\lambda)^{l}\delta_{t+l},\qquad \delta_t=r_t+\gamma V_\psi(s_{t+1})-V_\psi(s_t),\qquad
+\mathcal L^{V}=\big(V_\psi(s_t)-\hat R_t\big)^2 .
+$$
+
+**Settings.** $\epsilon=0.2$, $\lambda=0.95$, 16 environments x 256 steps = 4096 transitions per update, 10 epochs, minibatch 256, entropy
+coefficient 0. At the 100-decision time limit the value of the final observation is bootstrapped (truncation, not termination).
+
+Registered settings: `configs/models/ppo_md.yaml`.
+
+```bash
+python -m natural_rl train --model ppo_md --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id ppo_md-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id ppo_md-r7-s00
+python -m natural_rl play --run-id ppo_md-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id ppo_md-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id ppo_md-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id ppo_md-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id ppo_md-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id ppo_md-r7-s00
+python -m natural_rl plot --run-id ppo_md-r7-s00 --kind all
+python -m natural_rl export --run-id ppo_md-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id ppo_md-r7-s00
+```
+
+
+### ppo_box: PPO with continuous actions
+
+*Schulman et al., Proximal Policy Optimization Algorithms, 2017.* https://arxiv.org/abs/1707.06347
+
+**What it does.** The same algorithm with the same network sizes, optimiser and rollout budget as `ppo_md`; only the action distribution differs.
+The policy is a diagonal Gaussian over the seven normalised velocities,
+
+$$
+a\sim\mathcal N\big(\mu_\theta(s),\operatorname{diag}\sigma^2\big),\qquad v=v_{\max}\operatorname{clip}(a,-1,1),
+$$
+
+with a state-independent learned log-standard-deviation. Comparing it with `ppo_md` isolates the effect of the action representation inside the
+same method.
+
+Registered settings: `configs/models/ppo_box.yaml`.
+
+```bash
+python -m natural_rl train --model ppo_box --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id ppo_box-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id ppo_box-r7-s00
+python -m natural_rl play --run-id ppo_box-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id ppo_box-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id ppo_box-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id ppo_box-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id ppo_box-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id ppo_box-r7-s00
+python -m natural_rl plot --run-id ppo_box-r7-s00 --kind all
+python -m natural_rl export --run-id ppo_box-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id ppo_box-r7-s00
+```
+
+
+### sac: Soft Actor-Critic
+
+*Haarnoja et al., Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor, ICML 2018.* https://proceedings.mlr.press/v80/haarnoja18b.html
+
+**What it does.** An off-policy actor-critic that maximises return *and* policy entropy, which keeps exploration alive and makes training stable.
+The actor is a squashed Gaussian; two critics $Q_{\phi_1},Q_{\phi_2}$ (2 x 256 MLPs) with Polyak-averaged targets counter over-estimation.
+
+$$
+J(\pi)=\mathbb E\Big[\sum_t\gamma^{t}\big(r_t+\alpha\,\mathcal H(\pi(\cdot\mid s_t))\big)\Big],
+$$
+
+$$
+y=\tilde r+\gamma\Big(\min_{i}Q_{\bar\phi_i}(s',a')-\alpha\log\pi(a'\mid s')\Big),\ a'\sim\pi(\cdot\mid s'),\qquad
+\mathcal L_Q=\sum_i\big(Q_{\phi_i}(s,a)-y\big)^2,
+$$
+
+$$
+\mathcal L_\pi=\mathbb E\big[\alpha\log\pi(a\mid s)-\min_iQ_{\phi_i}(s,a)\big],\qquad
+\mathcal L_\alpha=-\alpha\,\big(\log\pi(a\mid s)+\bar{\mathcal H}\big),\ \ \bar{\mathcal H}=-\dim\mathcal A=-7 .
+$$
+
+The temperature $\alpha$ is tuned automatically toward the target entropy. One gradient update per environment transition (update-to-data ratio 1),
+10,000 random warm-up transitions, batch 256, learning rate $3\times10^{-4}$, $\tau=0.005$, relabelled replay. Evaluation and videos use the
+deterministic mean action.
+
+Registered settings: `configs/models/sac.yaml`.
+
+```bash
+python -m natural_rl train --model sac --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id sac-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id sac-r7-s00
+python -m natural_rl play --run-id sac-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id sac-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id sac-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id sac-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id sac-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id sac-r7-s00
+python -m natural_rl plot --run-id sac-r7-s00 --kind all
+python -m natural_rl export --run-id sac-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id sac-r7-s00
+```
+
+
+### td3: Twin Delayed DDPG
+
+*Fujimoto, van Hoof and Meger, Addressing Function Approximation Error in Actor-Critic Methods, ICML 2018.* https://proceedings.mlr.press/v80/fujimoto18a.html
+
+**What it does.** An off-policy actor-critic with a *deterministic* actor $\mu_\psi(s)$ and three devices against value over-estimation: twin critics
+(take the minimum), target-policy smoothing, and delayed actor updates.
+
+$$
+y=\tilde r+\gamma\min_{i}Q_{\bar\phi_i}\!\big(s',\ \operatorname{clip}(\mu_{\bar\psi}(s')+\epsilon,-1,1)\big),\qquad
+\epsilon=\operatorname{clip}\!\big(\mathcal N(0,0.2^{2}),-0.5,0.5\big),
+$$
+
+$$
+\mathcal L_Q=\sum_i\big(Q_{\phi_i}(s,a)-y\big)^2,\qquad \mathcal L_\mu=-\,\mathbb E\big[Q_{\phi_1}(s,\mu_\psi(s))\big]\ \text{every 2 critic updates.}
+$$
+
+Exploration noise $\mathcal N(0,0.1^{2})$ is added to the actor's action during training only. Other settings as SAC.
+
+Registered settings: `configs/models/td3.yaml`.
+
+```bash
+python -m natural_rl train --model td3 --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id td3-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id td3-r7-s00
+python -m natural_rl play --run-id td3-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id td3-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id td3-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id td3-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id td3-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id td3-r7-s00
+python -m natural_rl plot --run-id td3-r7-s00 --kind all
+python -m natural_rl export --run-id td3-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id td3-r7-s00
+```
+
+
+### tqc: Truncated Quantile Critics
+
+*Kuznetsov et al., Controlling Overestimation Bias with Truncated Mixture of Continuous Distributional Quantile Critics, ICML 2020.* https://proceedings.mlr.press/v119/kuznetsov20a.html
+
+**What it does.** SAC with *distributional* critics. Each of 5 critics predicts $N=25$ quantiles of the return distribution. To control over-estimation
+the largest atoms are discarded before forming the target: all $5\times25$ next-state atoms are pooled and sorted, and the top $5\times2=10$ are dropped.
+
+$$
+\mathcal Z=\operatorname{sort}\big\{z^{n,m}_{\bar\phi}(s',a')\big\}_{n\le5,\,m\le25},\qquad
+y_i=\tilde r+\gamma\big(z_{(i)}-\alpha\log\pi(a'\mid s')\big),\ \ i=1,\dots,115,
+$$
+
+$$
+\mathcal L=\sum_{n,i,m}\rho^{H}_{\tau_m}\!\big(y_i-z^{n,m}_\phi(s,a)\big),\qquad
+\mathcal L_\pi=\mathbb E\Big[\alpha\log\pi(a\mid s)-\tfrac1{5\cdot25}\textstyle\sum_{n,m}z^{n,m}_\phi(s,a)\Big],
+$$
+
+where $\rho^{H}_\tau$ is the quantile Huber loss and $\tau_m$ the quantile midpoints. Temperature, update ratio and relabelled replay as in SAC.
+
+Registered settings: `configs/models/tqc.yaml`.
+
+```bash
+python -m natural_rl train --model tqc --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id tqc-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id tqc-r7-s00
+python -m natural_rl play --run-id tqc-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id tqc-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id tqc-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id tqc-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id tqc-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id tqc-r7-s00
+python -m natural_rl plot --run-id tqc-r7-s00 --kind all
+python -m natural_rl export --run-id tqc-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id tqc-r7-s00
+```
+
+
+### crossq: CrossQ
+
+*Bhatt et al., CrossQ: Batch Normalization in Deep Reinforcement Learning for Greater Sample Efficiency and Simplicity, ICLR 2024.* https://proceedings.iclr.cc/paper_files/paper/2024/hash/f381114cf5aba4e45552869863deaaa7-Abstract-Conference.html
+
+**What it does.** A SAC-style learner that removes the target networks. Stability comes from adding batch normalisation to the critics and evaluating
+$(s,a)$ and $(s',a')$ in a *single joint forward pass*, so the normalisation statistics mix on-policy and off-policy samples:
+
+$$
+\big[Q(s,a),\,Q(s',a')\big]=Q_\phi\big([\,(s,a);(s',a')\,]\big),\qquad
+y=\tilde r+\gamma\Big(\operatorname{sg}\big[\min_iQ_i(s',a')\big]-\alpha\log\pi(a'\mid s')\Big),
+$$
+
+and the critic loss is the squared error to $y$ with gradients only through $Q(s,a)$. The actor maximises the same entropy-regularised value. All
+library defaults of the sb3-contrib implementation (wide critics, policy delay, learning rate, batch-norm momentum) are used and recorded in
+`config_resolved.yaml`; replay, relabelling and update ratio follow the other off-policy methods.
+
+Registered settings: `configs/models/crossq.yaml`.
+
+```bash
+python -m natural_rl train --model crossq --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id crossq-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id crossq-r7-s00
+python -m natural_rl play --run-id crossq-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id crossq-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id crossq-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id crossq-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id crossq-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id crossq-r7-s00
+python -m natural_rl plot --run-id crossq-r7-s00 --kind all
+python -m natural_rl export --run-id crossq-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id crossq-r7-s00
+```
+
+
+### tdmpc2: TD-MPC2
+
+*Hansen, Su and Wang, TD-MPC2: Scalable, Robust World Models for Continuous Control, ICLR 2024.* https://proceedings.iclr.cc/paper_files/paper/2024/hash/cf73d57b6dcda32b293df7c2d5341f49-Abstract-Conference.html
+
+**What it does.** A model-based method: it learns a *latent world model* from experience and chooses each action by *planning* inside it, instead of
+reading it from a policy network. Components (smallest official preset, 1M parameters):
+
+| Component | Maps | Role |
+| --- | --- | --- |
+| encoder $h_\theta$ | $s\mapsto z$ | embeds the observation in a normalised latent space |
+| dynamics $d_\theta$ | $(z,a)\mapsto z'$ | predicts the next latent |
+| reward head $R_\theta$ | $(z,a)\mapsto\hat r$ | discrete regression over 101 bins |
+| value heads $Q_\theta$ | $(z,a)\mapsto\hat q$ | discrete regression, ensemble with target copies |
+| policy prior $\pi_\theta$ | $z\mapsto a$ | proposes actions to the planner, trained by maximum entropy |
+
+**Model learning.** Windows of $H_p=3$ consecutive steps come from the relabelled replay (each window with its own relabelled goal, with dwell and
+rewards recomputed over the window). With $z_0=h_\theta(s_0)$, $z_{t+1}=d_\theta(z_t,a_t)$ and $\rho=0.5$:
+
+$$
+\mathcal L=\sum_{t=0}^{H_p-1}\rho^{t}\Big(c_{1}\,\big\lVert z_{t+1}-\operatorname{sg}\,h_\theta(s_{t+1})\big\rVert_2^2
++c_{2}\operatorname{CE}\!\big(\hat r_t,r_t\big)+c_{3}\operatorname{CE}\!\big(\hat q_t,\operatorname{sg}\,y_t\big)\Big),
+$$
+
+$$
+y_t=r_t+\gamma\,\bar Q_\theta\big(z_{t+1},\pi_\theta(z_{t+1})\big),\qquad c_1=20,\ c_2=c_3=0.1 .
+$$
+
+**Planning (MPPI).** At every decision the agent samples $N=512$ action sequences of length $H_p=3$ (24 of them from the policy prior), scores each in the
+latent model, keeps the 64 best and refits a Gaussian over sequences, for 6 iterations, then executes the first action:
+
+$$
+\hat G(a_{0:H_p-1})=\sum_{t=0}^{H_p-1}\gamma^{t}R_\theta(z_t,a_t)+\gamma^{H_p}\,Q_\theta\big(z_{H_p},\pi_\theta(z_{H_p})\big),\qquad
+w_i\propto\exp\!\big(\tau(\hat G_i-\max\hat G)\big),\ \tau=0.5 .
+$$
+
+One environment is used (the planner handles one observation at a time), with 1,000 random seed transitions, a pretraining pass of 1,000 updates, then one
+update per transition. The planner keeps one state per environment at evaluation. Planning samples among elite sequences even at evaluation time, so a
+checkpoint replays exactly only for the same device and seed (the tools seed it; `NATURAL_RL_POLICY_DEVICE` selects the device, otherwise CUDA if available). The
+official code is vendored unchanged apart from device and compile handling, listed in the docstring of `natural_rl/vendor/tdmpc2/__init__.py`.
+
+Registered settings: `configs/models/tdmpc2.yaml`.
+
+```bash
+python -m natural_rl train --model tdmpc2 --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id tdmpc2-r7-s00 --checkpoint-every 50000 --record-every-checkpoint
+python -m natural_rl checkpoints list --run-id tdmpc2-r7-s00
+python -m natural_rl play --run-id tdmpc2-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id tdmpc2-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id tdmpc2-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id tdmpc2-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id tdmpc2-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id tdmpc2-r7-s00
+python -m natural_rl plot --run-id tdmpc2-r7-s00 --kind all
+python -m natural_rl export --run-id tdmpc2-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id tdmpc2-r7-s00
+```
+
+
+### sac_pidlag: SAC with PID-Lagrangian cost budgets
+
+*SAC: Haarnoja et al., ICML 2018. PID Lagrangian: Stooke, Achiam and Abbeel, Responsive Safety in Reinforcement Learning by PID Lagrangian Methods, ICML 2020.*
+https://proceedings.mlr.press/v80/haarnoja18b.html · https://proceedings.mlr.press/v119/stooke20a.html
+
+**What it does.** SAC that also tries to keep the *expected number of unsafe proposals* below a budget. An unsafe proposal is a collision attempt or a
+pre-clip joint-limit attempt (counted on the proposed motion, so rejected or clipped commands are never hidden). This is an adaptation of the two methods and is not
+attributed to either paper alone.
+
+$$
+\max_\pi\ J_r(\pi)\quad\text{s.t.}\quad J_c(\pi)=\mathbb E\Big[\sum_{t=0}^{H-1}c_t\Big]\le d,\qquad c_t=\mathbb 1[\text{collision attempt}]+\mathbb 1[\text{limit attempt}],
+$$
+
+with $d=0.50$ (`budget_moderate_v1`) or $d=0.10$ (`budget_strict_v1`) events per episode. A second pair of critics learns the discounted cost,
+$y_c=c+\gamma\,\bar Q_c(s',a')$, and the actor maximises the normalised Lagrangian:
+
+$$
+\mathcal L_\pi=\mathbb E\Big[\alpha\log\pi(a\mid s)-\frac{\min_iQ_{r,i}(s,a)-\lambda\,\bar Q_c(s,a)}{1+\lambda}\Big].
+$$
+
+Here $\bar Q_c$ is the mean of the two cost critics (of the two target cost critics inside $y_c$).
+
+The multiplier follows a PID rule on a smoothed measurement $\hat J_c$ of the undiscounted episodic cost (exponential average, $\alpha_{\mathrm{ema}}=0.05$), updated
+after every block of finished episodes:
+
+$$
+e_k=\hat J_{c,k}-d,\quad I_{k+1}=\max(0,I_k+e_k),\quad D_k=\max(0,\hat J_{c,k}-\hat J_{c,k-1}),\quad
+\lambda_{k+1}=\operatorname{clip}\big(K_Pe_k+K_II_{k+1}+K_DD_k,\ 0,\ 100\big),
+$$
+
+with $K_P=0.1$, $K_I=0.01$, $K_D=0.01$. The budget bounds the *expected* cost; it is not a per-episode or zero-event guarantee, and joint clipping and collision
+rejection stay active regardless. Raw unsafe counts, the multiplier trace and the budget-violation frequency are logged. Needs `--cost-budget-id`.
+
+Registered settings: `configs/models/sac_pidlag.yaml`.
+
+```bash
+python -m natural_rl train --model sac_pidlag --reward r7_balanced --suite train_v1 --steps 1000000 --seed 0 --run-id sac_pidlag-r7-s00 --checkpoint-every 50000 --record-every-checkpoint --cost-budget-id budget_moderate_v1
+python -m natural_rl checkpoints list --run-id sac_pidlag-r7-s00
+python -m natural_rl play --run-id sac_pidlag-r7-s00 --checkpoint-step 150000 --task-id val_001
+python -m natural_rl video record --run-id sac_pidlag-r7-s00 --checkpoint-step 150000 --suite checkpoint_video_v1
+python -m natural_rl video backfill --run-id sac_pidlag-r7-s00 --suite checkpoint_video_v1
+python -m natural_rl video verify --run-id sac_pidlag-r7-s00 --all-checkpoints
+python -m natural_rl eval --run-id sac_pidlag-r7-s00 --suite test_v1 --manifest configs/eval/test_v1.json
+python -m natural_rl analyse --run-id sac_pidlag-r7-s00
+python -m natural_rl plot --run-id sac_pidlag-r7-s00 --kind all
+python -m natural_rl export --run-id sac_pidlag-r7-s00 --kind trajectories --suite test_v1
+python -m natural_rl results locate --run-id sac_pidlag-r7-s00
+```
+
+
+---
+
+## 4. Reward profiles and cost budgets
+
+$$
+r=r_0+\sum_i\lambda_i f_i
+$$
+
+Raw terms $f_i$, weights $\lambda_i$, weighted contributions and totals are logged at every decision. $d_t$ is the distance (m) from the accepted end effector to the goal.
+
+| Term | Definition |
 | --- | --- |
-| `config.yaml` | the config used |
-| `run.json` | the commits of both repositories, the image ID, versions, the simulator settings |
-| `metrics.csv` | model evaluation every 25 k steps on 256 held-out goals, from home and chained |
-| `train.csv` | loss, mean Q, ε |
-| `checkpoints/` | step_00010000.pt … step_01000000.pt and final.pt |
+| $r_0$ | $-\min(d/0.5,1)+\exp\!\big(-d^2/(2\cdot0.02^2)\big)-c-0.01\,\overline{(v/v_{\max})^2}$ (the historical reward, exactly) |
+| hold | $0.2\cdot\mathbb 1[d\le0.02]+0.8\cdot\mathbb 1[c_t\ge5]$ (fixed, not calibrated) |
+| time | $-\Delta t/5\,\mathrm s$ per decision before the first 5-step hold |
+| path | $-\lVert p_{t+1}-p_t\rVert/0.5\,\mathrm m$ (executed end-effector motion) |
+| speed | $-(\Delta t/5\,\mathrm s)\,\overline{(v/v_{\max})^2}$ (command-effort proxy, not energy) |
+| accel | $-\overline{\big((v_t-v_{t-1})/(\Delta t\cdot40\,\mathrm{rad/s^2})\big)^2}$ (needs the previous command) |
+| rom | $-\overline{\max\!\big(0,(0.1-m_j)/0.1\big)^2}$, $m_j$ = normalised distance to the nearest limit (range exposure, not stress) |
 
-The console prints the chained median error at each evaluation. A 1 M-step run takes about 25 minutes on the
-CPU with 6 threads when it runs alone (four in parallel take about 1 h 15 min each).
+Overlines are means over the seven joints. The twelve profiles (`configs/rewards/reward_v1.yaml`):
 
-Values can be overridden without editing a config, e.g. `--set train.steps=200000 agent.hidden=512`.
+| Profile | Terms | Question |
+| --- | --- | --- |
+| `r0_original` | r0 | does the historical baseline reproduce? |
+| `r1_hold` | r0 + hold | does explicit dwell improve terminal holding? |
+| `r2_time` `r3_path` `r4_speed` `r5_smooth` `r6_rom` | r1 + one term | does that term help? (single additions, compared with r1) |
+| `r7_balanced` | r1 + path + speed + accel + rom | how do combined terms behave? |
+| `r8_drop_path` `r9_drop_speed` `r10_drop_smooth` `r11_drop_rom` | r7 minus one term | is that term needed in the combination? (drop-ones, compared with r7) |
 
-## 5. Evaluate
+Additions and drop-ones are separate estimands and are never merged into one ranking.
 
-```bash
-# every checkpoint in the model (256 goals, from home and chained)
-python -m kangaroo_rl.evaluate --run runs/reach/seed0 --backend kinematic
-# every checkpoint in the simulator: the bowl appears under each of 64 goals; modes A and B
-python -m kangaroo_rl.evaluate --run runs/reach/seed0 --backend libero --modes A B --goals 64
-# reference controllers (random, Jacobian binned, Jacobian continuous)
-python -m kangaroo_rl.evaluate --config configs/reach.yaml --baseline dls --backend kinematic
-# the learned 2-joint Q against the exact value-iteration solution
-python -m kangaroo_rl.dp_check --run runs/slice2/seed0
-# sequential retargeting in the simulator: the bowl reappears every 3 s, no reset
-python -m kangaroo_rl.retarget_demo --run runs/reach/seed0
+**Coefficients are calibrated, never hand-picked.** `python -m natural_rl calibrate rewards --pilot-runs RUN1,RUN2` rolls the given pilot runs out on the
+`train_v1` tasks only and sets
+
+$$
+\lambda_i=\min\!\Big(10,\ \frac{0.10\cdot\operatorname{median}\lvert R_0\rvert}{\max\!\big(10^{-4},\,P_{75}\lvert F_i\rvert\big)}\Big),
+$$
+
+with $R_0$ the episodic r0 return and $F_i$ the episodic unweighted sum of term $i$. The values, the data SHA256 and the code hash are written into the
+register, which is then locked and immutable (a rule change means a new benchmark id). Profiles that contain a calibrated term refuse to train until
+the register is locked. `--dry-run` prints the table without writing.
+
+**Cost budgets** (`configs/costs/budgets_v1.yaml`) apply to `sac_pidlag`: the cost per decision is the number of collision attempts plus pre-clip joint-limit
+attempts, so a joint that is already at its limit and is commanded further counts at every decision. Budgets: 0.50 and 0.10 expected events per 100-decision episode.
+
+---
+
+## 5. Metrics, HKS and statistics
+
+All metrics use **executed, accepted end-effector positions** $p_k$ at 20 samples/s (sample $k$ is the state after $k$ decisions, $k=0$ the initial state), never
+commands, and success is computed independently of the training reward.
+
+**Outcomes.** With $d_k=\lVert p_k-g\rVert$ and tolerance 2 cm: *first entry* is the first $k\ge1$ with $d_k\le0.02$; *any hold* is any 5 consecutive accepted positions
+inside; the *terminal hold* (the primary success variable) is
+
+$$
+\text{terminal hold}=\mathbb 1\big[\,d_k\le0.02\ \ \text{for the last 5 samples}\,\big].
+$$
+
+Also stored: final error, executed path length, duration, goal departures after first entry, unsafe proposals per episode.
+
+**Movement segment.** Scoring uses onset to offset only: onset is the first sample whose speed reaches 5 % of the episode's peak; offset is the *last* sample at or above 5 % of
+peak speed, capped before the terminal 5-sample window. The steady hold therefore never inflates smoothness, pauses and a late second sub-movement stay inside the
+segment, and dithering inside the tolerance sphere is scored. Velocity and jerk come from a consistent Savitzky-Golay filter (window 7, order 3) applied to the
+whole episode before slicing; raw finite differences are kept as a sensitivity.
+
+**Descriptors.** With $T$ the segment duration, $L=\sum\lVert p_{k+1}-p_k\rVert$ its path length and $v(t)$ the speed:
+
+$$
+\eta=\frac{\lVert g-p_0\rVert}{L_{0\to\text{offset}}},\qquad
+\mathrm{DJ}=\frac{T^{5}}{L^{2}}\int_0^{T}\big\lVert \dddot p(t)\big\rVert^{2}dt\ \ (\text{reported as }\log(1+\mathrm{DJ})),
+$$
+
+$$
+\mathrm{SPARC}=-\int_{0}^{f_c}\sqrt{\Big(\frac1{f_c}\Big)^{2}+\Big(\frac{d\hat V(f)}{df}\Big)^{2}}\,df,\qquad \hat V(f)=\frac{V(f)}{V(0)},
+$$
+
+where $V$ is the Fourier magnitude of the speed profile (zero-padded) and the cutoff is fixed at $f_c\le8$ Hz (the code refuses cutoffs at or above the 10 Hz Nyquist
+frequency). Less negative SPARC is smoother. The timing descriptors compare the unit-mean speed $\hat v(s)=v/\bar v$ on normalised time $s\in[0,1]$ with the
+analytic minimum-jerk profile (a metric reference only, never a controller):
+
+$$
+x(\tau)=10\tau^{3}-15\tau^{4}+6\tau^{5},\qquad v_{\mathrm{mj}}(s)=30\,s^{2}(1-s)^{2},\qquad
+\mathrm{RMSE}=\sqrt{\tfrac1n\textstyle\sum_i\big(\hat v(s_i)-v_{\mathrm{mj}}(s_i)\big)^2}.
+$$
+
+Further descriptors: number of speed peaks (10 % prominence), pause fraction (share of segment samples below 1 % of peak speed), joint-reversal rate (executed joint
+velocity sign changes per second, motion below $10^{-4}$ rad ignored). Short, zero-displacement, non-finite or non-held episodes receive explicit quality flags and never
+an artificially perfect score. Because the window drops the first and last ~6 % of a movement, an ideal minimum-jerk reach has $\mathrm{RMSE}\approx0.14$ and
+$\mathrm{DJ}\approx200$ through this exact pipeline (the textbook 720 is for the full movement); these are constant floors for every policy.
+
+**HKS (0-100).** Each descriptor is scaled to $[0,1]$ with frozen anchors $(q_{lo},q_{hi})$,
+
+$$
+b_\uparrow(x)=\operatorname{clip}\!\Big(\frac{x-q_{lo}}{q_{hi}-q_{lo}},0,1\Big),\qquad b_\downarrow(x)=1-b_\uparrow(x),
+$$
+
+and four equally weighted domains are averaged:
+
+$$
+\begin{aligned}
+D_1&=\tfrac12\,b_\uparrow(\mathrm{SPARC})+\tfrac12\,b_\downarrow\big(\log(1+\mathrm{DJ})\big) &&\text{smoothness}\\
+D_2&=\tfrac12\,b_\downarrow(\mathrm{RMSE})+\tfrac12\,b_\downarrow\big(\max(\text{peaks}-1,0)\big) &&\text{timing}\\
+D_3&=b_\uparrow(\eta) &&\text{spatial (direct-reach tasks only)}\\
+D_4&=\tfrac12\,b_\downarrow(\text{pause fraction})+\tfrac12\,b_\downarrow(\text{reversal rate}) &&\text{continuity}
+\end{aligned}
+\qquad \mathrm{HKS}=25\,(D_1+D_2+D_3+D_4).
+$$
+
+The lower anchor $q_{lo}$ is the 5th percentile; the upper anchor $q_{hi}$ is the first of the 95th percentile, the 99th percentile and the maximum that exceeds $q_{lo}$ (several
+descriptors are exactly 0 for clean reaches). The rung used is recorded per metric, and a metric that never varies is a blocking error and is never silently replaced by zero.
+Anchors are fitted per simulator backend on successful, quality-valid **validation** episodes only (`calibrate scalers --runs RUN1,RUN2`, at least 200 episodes) and locked
+before held-out evaluation.
+
+**Reliability-adjusted score.** Failures and unscorable successes contribute zero and stay in the denominator:
+
+$$
+R\text{-}\mathrm{HKS}=\frac1{N_{\text{tasks}}}\sum_{i}\ \text{terminal hold}_i\cdot\mathrm{HKS}_i .
+$$
+
+**Statistics.** Frames are never replicates; the resampling units are held-out task IDs and training seeds (crossed bootstrap, 2,000 resamples, seed 20261121, 95 % percentile
+intervals). Leaderboards share tasks across models and report rank probabilities. A reward effect is a within-policy paired difference on matched (seed, task) cells,
+
+$$
+\Delta=\overline{\text{R-HKS}_{\text{treatment}}-\text{R-HKS}_{\text{baseline}}},\qquad
+q_{(i)}=\min_{j\ge i}\ \frac{m}{j}\,p_{(j)}\quad\text{(Benjamini-Hochberg over the registered family of }m\text{ contrasts)},
+$$
+
+and missing cells (crashes, timeouts) are counted and never imputed. A high point estimate is not called a winner unless the intervals and rank probabilities resolve it.
+
+---
+
+## 6. Tasks and evaluation
+
+Immutable manifests `configs/eval/{train,val,test,ood}_v1.json` are generated deterministically (seed 20261121, content SHA256 recorded, `manifests verify` re-checks them):
+
+| Split | Tasks | Purpose |
+| --- | --- | --- |
+| `train_v1` | 500 | reach configurations for learning |
+| `val_v1` | 100 | checkpoint and coefficient calibration; `val_001` is the canonical video task |
+| `test_v1` | 200 | direct-reach tasks for the full HKS ranking |
+| `ood_v1` | 100 | 50 obstacle-detour tasks (the straight line crosses the scene's existing table edge) and 50 near-joint-limit tasks |
+
+Direct-reach tasks start collision-free with the hand at least 3 cm above the table, have reach distance 0.10-0.50 m, are feasible for a continuous Jacobian controller (used only
+as a generation filter, never trained or ranked), and no two tasks share a start and goal within 2 cm. Each task fixes the start pose, goal, scene and a 100-decision budget.
+The robot base sits 0.25 m behind the table edge (Kangaroo_Libero's default is 0.55 m) through a generated settings override; Kangaroo_Libero itself is unmodified.
+
+**Two backends, never pooled.** The *fast kinematic* backend (exact transition: forward kinematics plus the filtered collision test) is used for training and most evaluation.
+The *physics* backend (`eval ... --backend physics`) executes the same decisions in Kangaroo_Libero (100 Hz PD control, 5 ticks per decision, measured hand positions). The same task
+IDs and geometry serve both; results live in separate tables.
+
+**Which checkpoint is tested.** The validation-selected one: highest `val_v1` terminal-hold rate on the kinematic backend, ties broken by fewer unsafe events, then the later step.
+Run `eval --suite val_v1 --all-checkpoints` first; `eval --suite test_v1` refuses to choose from test results. `--final` or `--checkpoint-step N` override it.
+
+**Testbed facts.** The simulator enforces joint *position* limits only: there is no joint-velocity limit, so 1 rad/s is a benchmark contract inherited from the original DecQN. From the
+home pose the hand hangs below the table top, so straight start-to-goal lines would hit the table edge; direct-reach tasks start above the table. No torque or energy quantity is reported.
+
+---
+
+## 7. Training programme
+
+| Phase | Programme | Runs | Videos | Transitions |
+| --- | --- | --- | --- | --- |
+| P0 | historical DecQN `r0_original` (`--contract hist_v1`, obs_v1), 3 seeds x 1M | 3 | 63 | 3M |
+| P1 | 10 controllers x {r1, r7} x 3 seeds x 200k | 60 | 300 | 12M |
+| P2 | 10 controllers x {r1, r7} x 5 seeds x 1M | 100 | 2,100 | 100M |
+| P3 | DecQN + 3 selected controllers x 10 other profiles x 5 seeds x 1M | 200 | 4,200 | 200M |
+| P4 | SAC-PID-Lagrangian x r7 x {moderate, strict} x seeds 5-9 x 1M | 10 | 210 | 10M |
+| **Total** | | **373** | **6,873** | **325M** |
+
+P3's three controllers come from `catalog programme --phase P3 --select`: the highest validation terminal-hold rate on `r7_balanced` (ties: lower unsafe rate), read from
+validation tables only. `--steps` counts single-environment transitions, not gradient updates or wall time, and must be a multiple of the environment count (16; TD-MPC2 uses 1).
+Run IDs are `<model>-r<k>-s<seed>` (P1 adds `-p1`, P0 is `decqn-r0hist-s00`, P4 is `sac_pidlag-r7-bmod|bstrict-s05..09`). A raw video is about 17 MB, so the 6,873 videos need roughly 115 GB; `train`
+stops with an explicit disk alert if free space is below its estimate and never deletes or downsamples anything.
+
+---
+
+## 8. Checkpoints, videos and results
+
+**Checkpoints** are saved atomically (SHA256 recorded in `checkpoint_index.csv`) at step 0, every `--checkpoint-every` transitions, at the final step even if off cadence, and whenever you
+`touch <run_dir>/MANUAL_CHECKPOINT`. `--checkpoint-step N` always means exactly that saved step, never "the latest".
+
+**Every checkpoint gets a raw video** (`--record-every-checkpoint`). The checkpoint is reloaded from disk into a separate evaluation environment, the validation task `val_001` is replayed
+deterministically (seed 20261121), and the accepted robot state is rendered at $t=0$ and after every 0.05 s decision (101 frames for 100 decisions) into `raw.mkv`: lossless FFV1, 640x480,
+fixed camera `canonical_v1`, no overlays or goal marker, rejected and still frames kept. Frames are encoded as `bgr0` (this FFmpeg's FFV1 has no 8-bit planar RGB), a reversible channel reorder.
+`preview.mp4` is a lossy viewing copy and never the record. `raw.mkv` plays in VLC or `ffplay` (FFV1 support varies by player; use `preview.mp4` if yours cannot).
+
+* A run is `complete` only when every checkpoint has a verified video; a failed capture marks it `incomplete`, prints `[ERROR]` and exits non-zero (`--strict-video` aborts at once).
+* `video verify` decodes every file with two independent decoders and compares each frame's SHA256 with the manifest.
+* `video record` on a step that already has a verified video never overwrites it: it re-renders in memory and reports whether the pixels are identical.
+* `video backfill` regenerates only missing or failed videos.
+* `play` runs one exact saved checkpoint headless and writes a synchronised trace.
+
+**Determinism.** `PYTHONHASHSEED=0`, numpy and torch seeded from `--seed`, CPU threads from `--threads` (default 4). Replay of a checkpoint is deterministic for every controller
+(TD-MPC2: for a fixed device and seed). Smoke runs (`--smoke`) go to `results/smoke/` and skip the clean-tree check. Registered runs refuse to start on a dirty git tree.
+
+**Results layout.** Units are metres, seconds, radians; positions are in the `robot0_base_link` frame.
+
+```
+results/runs/<backend>/<model>/<reward>/<run_id>/
+    manifest.json  config_resolved.yaml  train_history.parquet  train_episodes.parquet
+    checkpoint_index.csv  video_index.csv
+    checkpoints/step_000150000/{manifest.json, policy_state/}
+    videos/step_000150000/val_001/{raw.mkv, preview.mp4, video_manifest.json, rollout.parquet}
+    eval/<backend>/<suite>/step_XXXXXXXXX/{episode_metrics, action_events, trajectories}.parquet
+    analysis/summary.csv   exports/trajectories/*.{csv,parquet}   play/
 ```
 
-Results go to `<run>/eval/` (`*.json` summaries, `*.npz` errors after every step). Simulator modes:
-- **A:** the policy sees the commanded joint positions.
-- **B:** the policy sees the measured ones.
+The run manifest records both git commits and whether the tree was dirty, the image fingerprint, library versions, and config and manifest hashes. `episode_metrics` has one row per task
+(terminal hold, first entry, final error, path, duration, every descriptor, D1-D4, HKS, R-HKS, quality flag); `action_events` one row per decision (commanded and executed velocity, proposed
+collision, rejected collision, clip proposal, raw and weighted reward terms, cost); `trajectories` one row per frame (joint angles, end-effector position, goal, velocity).
 
-In both, the error is measured on the simulated hand ([`TECHNICAL.md`](TECHNICAL.md), section 10).
+---
 
-## 6. The whole study and the figures
+## 9. Tests
 
-```bash
-bash scripts/run_study.bash        # trains, evaluates and draws everything in docs/
-python scripts/make_figures.py     # only redraw the figures and tables from existing runs
-```
+`python -m pytest -q` inside the container (`-m "not slow"` skips the tests that render real videos; tests marked as GPU-only skip themselves where there is no GPU). `tests/bench/` checks, against analytic references:
 
-`run_study.bash` runs the stages in order:
-1. the probe
-2. the training runs: 3 seeds of the main config, 3 of raw angles, 1 without relabelling, the 2-joint run
-3. model and simulator evaluation of every checkpoint
-4. the reference controllers
-5. the exact Bellman check
-6. the retargeting demo
-7. the figures
+* **Metrics and scoring:** terminal-hold timing, minimum-jerk reference values, flags for short/zero/non-finite signals, the Nyquist guard, HKS scaling and zero-for-failure R-HKS, the scaler fallback ladder.
+* **Statistics:** Benjamini-Hochberg against a hand example, paired-bootstrap alignment, rank probabilities, determinism.
+* **Rewards and replay:** the historical r0 to 1e-12, dwell and first-hold logic, agreement of the stepwise and whole-history implementations, and that every relabelled replay sample equals an independent live rollout.
+* **Controllers:** DecQN parity with the historical agent, Growing Q masking, TD-MPC2 windows and seeded replay, and each of the ten controllers training, checkpointing at exact transition counts, reloading and obeying its action contract on CPU and on CUDA.
+* **Video and run integrity:** bit-exact lossless roundtrip, detection of corruption and of wrong, missing or lossy frames, deterministic re-render, validation-only checkpoint selection, calibration immutability, the programme totals (373 runs, 6,873 videos, 325M transitions), the physics stratum, export, and that every command in this README parses with the real CLI.
+* **Historical parity:** the frozen original training loop under the benchmark checkpoint/video contract, whose converted policy picks the same actions as the native agent.
 
-Every number and figure in [`docs/results.md`](docs/results.md) comes from these files.
+---
 
-## 7. Where everything is
+## 10. Repository layout
 
 | Path | What it is |
 | --- | --- |
-| `kangaroo_rl/scene.py` | the arm as the RL problem sees it: joints, limits, reach point, table, collision test |
-| `kangaroo_rl/encoding.py` | sin/cos positional encoding |
-| `kangaroo_rl/mdp.py` | velocity bins, transition rule, reward, goal pool, start poses: the MDP, defined once |
-| `kangaroo_rl/envs/kinematic.py` | the model: batched exact transition rule, used for training |
-| `kangaroo_rl/envs/libero.py` | the simulator adapter: velocity commands as Kangaroo_Libero position targets |
-| `kangaroo_rl/agent/` | the network, factored Double-Q learning, replay with hindsight relabelling |
-| `kangaroo_rl/dp.py`, `dp_check.py` | exact value iteration on the 2-joint lattice and the comparison |
-| `kangaroo_rl/baselines.py` | random and damped-least-squares Jacobian controllers |
-| `kangaroo_rl/train.py`, `evaluate.py`, `retarget_demo.py` | command-line entry points |
-| `kangaroo_rl/viz/` | renderer, plot style, diagrams |
-| `configs/` | experiment configs |
-| `scripts/` | probe, full study, figures |
-| `tests/` | pytest suite |
-| `docs/` | results, architecture, tests, integration; `figures/` (technical) and `results/` (measured) |
-| `docker/`, `run_rl_docker.bash` | the RL image and its launcher |
-| `sim/Kangaroo_Libero` | the simulator, pinned as a submodule |
+| `natural_rl/` | the benchmark: `cli.py`, `train.py`, `hist.py`, `eval.py`, `rollout.py`, `replay.py`, `costs.py`, `selection.py`, `programme.py`, `stats.py`, `checkpoints.py`, `render.py`, `video.py`, `checkpoint_video.py`; `env/` (contract, fast and physics environments, task manifests); `rewards/`; `metrics/` (outcomes, kinematics, HKS); `models/` (the ten controllers); `vendor/tdmpc2/` |
+| `configs/` | `models/`, `rewards/`, `costs/`, `metrics/`, `render/`, `eval/` (manifests and the video task); the original `reach*.yaml` and `slice2.yaml` |
+| `tests/` | `bench/` (benchmark) and the original suite |
+| `compose.yaml`, `compose.gpu.yaml`, `.env.example`, `docker/` | the `rl` service, the CDI GPU override, the pinned image (`Dockerfile.natural`; `Dockerfile` is the original image) |
+| `kangaroo_rl/`, `run_rl_docker.bash` | the original experiment and its launcher |
+| `sim/Kangaroo_Libero` | the simulator, a pinned git submodule |
+| `results/`, `data/` | bind-mounted outputs (git-ignored) |
+
+---
+
+## 11. The original experiment
+
+`kangaroo_rl` trains the goal-conditioned DecQN of section 3 on a fast model of the arm and evaluates it in the simulator. The model is the same compiled MuJoCo model as the simulator
+(forward kinematics agrees to $10^{-9}$ m and the collision test agrees with full contact detection), but a model step costs a fraction of a simulator decision, so millions of transitions are
+cheap. Goals are collision-free reach points over the table (a pool of 8,508 points thinned to one per 2 cm voxel); starts are 50 % where the previous episode ended (a retargeting
+situation), 25 % home with noise, 25 % a random collision-free pose.
+
+**Executing a decision in the simulator.** Kangaroo_Libero accepts only absolute joint-position targets at 100 Hz, so one decision is five ticks of a linearly interpolated reference
+with a velocity feed-forward $\tau_j=k_d/k_p$ (none on the forearm roll, whose inertia is too small for it, nor on the two wrist joints, which are position actuators without a velocity term):
+
+$$
+q_{\text{ref}}(m)=q_0+\tfrac m5\,(q_{\text{cmd}}-q_0),\quad m=1..5,\qquad q_{\text{target}}=\operatorname{clip}\big(q_{\text{ref}}(m)+\tau_j\,v\big).
+$$
+
+Two observation modes exist: A (the policy sees the commanded positions) and B (the measured positions). Error is always measured on the simulated hand.
+
+```bash
+./run_rl_docker.bash --build --headless -- python -m pytest -q                 # builds kangaroo-rl:0.1.0 (simulator image + torch 2.5.1)
+python -m kangaroo_rl.train --config configs/reach.yaml --seed 0              # runs/reach/seed0/{config.yaml,run.json,metrics.csv,train.csv,checkpoints/}
+python -m kangaroo_rl.evaluate --run runs/reach/seed0 --backend kinematic     # every checkpoint on 256 held-out goals
+python -m kangaroo_rl.evaluate --run runs/reach/seed0 --backend libero --modes A B --goals 64
+python -m kangaroo_rl.evaluate --config configs/reach.yaml --baseline dls --backend kinematic   # Jacobian reference controllers
+python -m kangaroo_rl.dp_check --run runs/slice2/seed0                        # learned Q vs exact value iteration on a 2-joint lattice
+```
+
+`configs/reach_raw.yaml` (raw angles instead of the sinusoidal encoding) and `configs/reach_noher.yaml` (no relabelling) are comparison configs; `configs/slice2.yaml` is the 2-joint
+lattice on which the Bellman equation can be solved exactly by value iteration.

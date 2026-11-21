@@ -1,0 +1,31 @@
+id: decqn
+name: DecQN
+family: discrete
+action_space: "MultiDiscrete([7]*7): one bin of {-1,-0.3,-0.1,0,0.1,0.3,1} per joint, v = v_max * level"
+paper:
+  authors: "Seyde, T. et al."
+  title: "Solving Continuous Control via Q-learning"
+  venue: "ICLR 2023"
+  url: "https://arxiv.org/abs/2210.12566"
+implementation: "natural_rl.models.decqn (benchmark contract); kangaroo_rl.agent.decqn is the frozen historical agent used for P0"
+off_policy: true
+goal_relabelling: {enabled: true, strategy: future, ratio: 0.8}
+n_envs: 16
+# Registered values are the historical DecQN defaults (configs/reach.yaml), unchanged.
+hyper:
+  hidden: 256
+  depth: 2
+  gamma: 0.95
+  lr: 3.0e-4
+  batch: 256
+  tau: 0.005
+  grad_clip: 10.0
+  n_step: 3
+  replay: 1000000
+  warmup: 10000
+  updates_per_step: 4          # gradient updates per vector step of n_envs transitions
+  her_ratio: 0.8
+  eps_start: 1.0
+  eps_end: 0.02
+  eps_fraction: 0.15
+  max_repeat: 10

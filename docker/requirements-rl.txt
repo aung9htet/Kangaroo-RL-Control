@@ -1,0 +1,13 @@
+# Exact pins layered on the Kangaroo_Libero simulator image (Python 3.10, numpy 1.26.4, gym 0.25.2,
+# mujoco 3.4.0, scipy 1.13.1, matplotlib 3.5.3, torch 2.7.1+cu126 installed separately). Chosen so that no
+# simulator pin changes. Verified at image build by docker/Dockerfile.natural (imports + FFV1 encoder).
+#
+# stable-baselines3 2.9.x needs torch >= 2.8, so the 2.7.x line (torch >= 2.3) is the newest compatible one.
+stable-baselines3==2.7.1
+sb3-contrib==2.7.1           # TQC and CrossQ (CrossQ ships from 2.5.0)
+gymnasium==0.29.1            # SB3 needs 0.29.1 <= v < 1.3; the simulator's own gym==0.25.2 is untouched
+pandas==2.2.3
+pyarrow==17.0.0              # parquet: every trajectory, episode and action-event table
+av==13.1.0                   # PyAV with bundled FFmpeg: FFV1 encode/decode for lossless raw video (14.x has no cp310 wheel)
+tensordict==0.8.3            # TD-MPC2 world model: the release paired with torch 2.7.x (TD-MPC2's own pin)
+omegaconf==2.3.0

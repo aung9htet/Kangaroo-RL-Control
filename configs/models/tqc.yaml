@@ -1,0 +1,24 @@
+id: tqc
+name: TQC
+family: continuous off-policy
+action_space: "Box[-1,1]^7: v = v_max * clip(a, -1, 1)"
+paper: {authors: "Kuznetsov, A. et al.", title: "Controlling Overestimation Bias with Truncated Mixture of Continuous Distributional Quantile Critics", venue: "ICML 2020 (PMLR 119)", url: "https://proceedings.mlr.press/v119/kuznetsov20a.html"}
+implementation: "sb3-contrib 2.7.1 TQC with the goal-relabelling replay"
+n_envs: 16
+off_policy: true
+goal_relabelling: {enabled: true, strategy: future, ratio: 0.8}
+hyper:
+  gamma: 0.95
+  lr: 3.0e-4
+  batch: 256
+  tau: 0.005
+  learning_starts: 10000      # random actions first; must be >= n_envs * horizon so one episode is complete
+  replay: 1000000
+  her_ratio: 0.8
+  n_step: 1                   # paper default; the GoalReplay supports n > 1 (used by DecQN)
+  utd: 1                      # one gradient step per environment transition (gradient_steps = -1)
+  net_arch: [256, 256]
+  ent_coef: auto
+  n_critics: 5
+  n_quantiles: 25
+  top_quantiles_to_drop_per_net: 2

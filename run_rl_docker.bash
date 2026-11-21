@@ -45,7 +45,7 @@ docker info >/dev/null 2>&1 || die 'Docker Engine is unavailable or your user ca
 [[ $repo_dir != *,* ]] || die 'Docker mount paths cannot contain commas; move the checkout to another path.'
 if ((build)) || ! docker image inspect "$image" >/dev/null 2>&1; then
     docker image inspect "$base_image" >/dev/null 2>&1 \
-        || die "Base image $base_image is missing. Pull or build it from sim/Kangaroo_Libero first (see docs/integration.md)."
+        || die "Base image $base_image is missing. Pull or build it from sim/Kangaroo_Libero first (see README.md, section 12)."
     echo "Building $image from $base_image"
     docker build --network host --platform linux/amd64 --build-arg "BASE_IMAGE=$base_image" \
         -f "$repo_dir/docker/Dockerfile" -t "$image" "$repo_dir/docker"

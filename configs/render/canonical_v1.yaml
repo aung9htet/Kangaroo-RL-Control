@@ -1,0 +1,21 @@
+# Fixed raw-video camera. No overlays, markers, text or post-processing are ever drawn on frames.
+# World-frame free camera (the robot faces +x). Chosen by visual inspection of six candidate viewpoints rendered
+# at the pose nearest to the val_001 goal, BEFORE any policy was trained: the original "reach" view of
+# kangaroo_rl.viz (azimuth 155) is occluded by the cabinet in the middle of the scene, while this side-on view
+# shows the whole arm and hand reaching over the table. Frozen: changing any value here creates a new camera ID
+# (and a new benchmark ID), never a silent edit.
+camera_id: canonical_v1
+render_version: 1
+width: 640
+height: 480
+view:
+  type: free
+  lookat: [-0.30, -0.15, 1.0]
+  distance: 1.5
+  azimuth: 100.0
+  elevation: -20.0
+scene_option:
+  collision_geoms: false            # geom group 0 hidden, visual meshes shown
+lighting: scene_default             # identical scene lighting for every checkpoint
+background: scene_default
+goal_marker: none                   # the goal is not drawn; its identity is in the manifest and rollout parquet
