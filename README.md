@@ -14,11 +14,29 @@ HKS measures resemblance to a few simple point-to-point reaching priors (one smo
 pauses or reversals). It is a computational proxy, not a validated measure of perceived naturalness. "Speed effort" and "range margin"
 are command/geometry proxies, not energy or joint stress.
 
-**Contents**
-1. [Quick start](#1-quick-start) · 2. [The problem](#2-the-problem-state-action-transition-reward) · 3. [The ten controllers](#3-the-ten-controllers)
-· 4. [Reward profiles and cost budgets](#4-reward-profiles-and-cost-budgets) · 5. [Metrics, HKS and statistics](#5-metrics-hks-and-statistics)
-· 6. [Tasks and evaluation](#6-tasks-and-evaluation) · 7. [Training programme](#7-training-programme) · 8. [Checkpoints, videos and results](#8-checkpoints-videos-and-results)
-· 9. [Tests](#9-tests) · 10. [Repository layout](#10-repository-layout) · 11. [Original experiment](#11-the-original-experiment)
+## Contents
+
+- [1. Quick start](#1-quick-start): build and enter the container, enable the GPU
+- [2. The problem: state, action, transition, reward](#2-the-problem-state-action-transition-reward): what every controller observes, outputs and is rewarded for
+- [3. The ten controllers](#3-the-ten-controllers): what each one does, its equations and its commands
+  - [`decqn`](#decqn-decqn): DecQN
+  - [`growing_q`](#growing_q-growing-q-networks): Growing Q-Networks
+  - [`ppo_md`](#ppo_md-ppo-with-multidiscrete-actions): PPO with MultiDiscrete actions
+  - [`ppo_box`](#ppo_box-ppo-with-continuous-actions): PPO with continuous actions
+  - [`sac`](#sac-soft-actor-critic): Soft Actor-Critic
+  - [`td3`](#td3-twin-delayed-ddpg): Twin Delayed DDPG
+  - [`tqc`](#tqc-truncated-quantile-critics): Truncated Quantile Critics
+  - [`crossq`](#crossq-crossq): CrossQ
+  - [`tdmpc2`](#tdmpc2-td-mpc2): TD-MPC2
+  - [`sac_pidlag`](#sac_pidlag-sac-with-pid-lagrangian-cost-budgets): SAC with PID-Lagrangian cost budgets
+- [4. Reward profiles and cost budgets](#4-reward-profiles-and-cost-budgets): the reward terms, the twelve profiles, coefficient calibration
+- [5. Metrics, HKS and statistics](#5-metrics-hks-and-statistics): how movements are scored and compared
+- [6. Tasks and evaluation](#6-tasks-and-evaluation): splits, backends, checkpoint selection
+- [7. Training programme](#7-training-programme): phases, seeds, run counts
+- [8. Checkpoints, videos and results](#8-checkpoints-videos-and-results): raw videos, verification, results layout
+- [9. Tests](#9-tests): what the automated tests check
+- [10. Repository layout](#10-repository-layout): where things are
+- [11. The original experiment](#11-the-original-experiment): the preserved single-experiment code
 
 ---
 
