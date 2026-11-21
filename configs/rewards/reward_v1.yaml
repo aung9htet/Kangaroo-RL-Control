@@ -8,7 +8,7 @@
 # data. `train` refuses every profile that contains a calibrated term while `status` is not `locked`.
 # `hold` is a fixed, uncalibrated term (0.2 / 0.8 as registered in the protocol).
 version: reward_v1
-status: unlocked                   # unlocked -> locked by `calibrate rewards`; never edit by hand afterwards
+status: locked                   # locked by `calibrate rewards`; immutable
 
 constants:
   dt_s: 0.05
@@ -76,14 +76,14 @@ calibration:
   scale_fraction: 0.10
   floor: 1.0e-4
   data:                            # filled in by `calibrate rewards`
-    source: "deterministic rollouts of the P0 checkpoints on train_v1 tasks (training split only)"
-    n_episodes: null
-    sha256: null
-    code_sha: null
-    locked_at: null
+    source: "deterministic rollouts of runs ['decqn-r0hist-s00', 'decqn-r0hist-s01', 'decqn-r0hist-s02'] on train_v1 tasks (checkpoints: final)"
+    n_episodes: 1500
+    sha256: '748922060901fdab8c1e777ffa308655dc9c67b6eddaef2e3f1c86bb3ca7fd76'
+    code_sha: '7c8780a9ea0fd86669098579cf6ec484f1008552e99a0fb31e23bc9733c9b76f'
+    locked_at: '2026-11-21T12:15:36+0100'
   lambda:                          # filled in by `calibrate rewards`
-    time: null
-    path: null
-    speed: null
-    accel: null
-    rom: null
+    time: 1.993452912
+    path: 0.4862182607
+    speed: 5.606279721
+    accel: 0.2390896812
+    rom: 0.08355745102

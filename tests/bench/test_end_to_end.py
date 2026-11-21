@@ -70,6 +70,20 @@ def test_test_checkpoint_is_never_chosen_without_validation_results_then_evaluat
     assert len(pd.read_parquet(out / 'trajectories.parquet')) == 200 * 101
     assert len(pd.read_parquet(out / 'action_events.parquet')) == 200 * 100
     assert main(['analyse', '--run-id', RUN]) == 0
+    assert not pd.read_csv(run / 'analysis' / 'summary.csv')['hks_scored'].any()
+
+
+def test_analyse_scores_stored_evaluations_once_the_scalers_are_locked_later(run, monkeypatch):
+    import numpy as np
+    from natural_rl.metrics.hks import SCALED_METRICS, fit_scalers
+    rng = np.random.default_rng(0)
+    scalers = fit_scalers({m: rng.uniform(0.0, 1.0, 300) for m in SCALED_METRICS}, min_episodes=200)
+    monkeypatch.setattr('natural_rl.eval.load_scalers', lambda backend: scalers)
+    assert main(['analyse', '--run-id', RUN]) == 0
+    summary = pd.read_csv(run / 'analysis' / 'summary.csv')
+    assert summary['hks_scored'].all() and summary['R_HKS'].notna().all()
+    stored = pd.read_parquet(next((run / 'eval' / 'kinematic' / 'test_v1').glob('step_*')) / 'episode_metrics.parquet')
+    assert (stored['hks_status'] == 'scalers_not_locked').all()                   # the stored evaluation tables are never rewritten
 
 
 def test_a_manifest_other_than_the_registered_one_is_refused(run):
@@ -108,3 +122,34 @@ def test_trajectory_export_is_flat_with_units_in_the_column_names(run):
         assert column in frame.columns, column
     assert len(frame) == 100 * 101 and frame['task_id'].nunique() == 100
     assert main(['export', '--run-id', RUN, '--kind', 'geometry', '--suite', 'val_v1']) == 2        # not implemented: says so
+
+
+SAME = ['train', '--model', 'decqn', '--reward', 'r1_hold', '--suite', 'train_v1', '--steps', '1600', '--seed', '0', '--run-id', RUN,
+        '--checkpoint-every', '1600', '--record-every-checkpoint', '--smoke', '--set', 'hyper.warmup=800', 'hyper.replay=16000']
+
+
+def test_starting_a_complete_run_again_skips_it_and_keeps_every_result(run, capsys):
+    before = (run / 'manifest.json').read_bytes()
+    assert main(SAME) == 0
+    assert '[skip]' in capsys.readouterr().out
+    assert (run / 'manifest.json').read_bytes() == before
+
+
+def test_a_complete_run_id_cannot_be_reused_for_another_configuration(run):
+    other = SAME.copy()
+    other[other.index('--seed') + 1] = '7'
+    with pytest.raises(FileExistsError, match='different configuration'):
+        main(other)
+    assert (run / 'manifest.json').exists()
+
+
+def test_an_unfinished_run_stops_unless_restart_moves_it_aside(run, capsys):
+    import json
+    manifest = json.loads((run / 'manifest.json').read_text())
+    (run / 'manifest.json').write_text(json.dumps({**manifest, 'status': 'running'}))
+    with pytest.raises(FileExistsError, match='--restart'):                      # no silent override of a partial run
+        main(SAME)
+    assert (run / 'manifest.json').exists()
+    assert main(SAME + ['--restart']) == 0
+    assert list((run.parents[4] / 'abandoned').glob(f'{RUN}-*'))                 # the old folder is kept, not deleted
+    assert json.loads((run / 'manifest.json').read_text())['status'] == 'complete'

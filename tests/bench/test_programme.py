@@ -67,3 +67,20 @@ def test_untracked_source_files_make_a_working_tree_dirty(tmp_path):
     assert not git_state(tmp_path)['dirty']                                   # ignored outputs never make a run dirty
     (tmp_path / 'b.py').write_text('y = 2\n')                                 # a new, uncommitted source file does
     assert git_state(tmp_path)['dirty']
+
+
+def test_todo_lists_leave_out_finished_runs_and_steps(tmp_path):
+    import json
+    from natural_rl.programme import pending_lines, phase_runs, run_lines
+    run = phase_runs('P1')[0]
+    assert pending_lines(run, tmp_path) == run_lines(run)                          # nothing on disk: every line
+    out = tmp_path / 'kinematic' / run['model'] / run['reward'] / run['run_id']
+    out.mkdir(parents=True)
+    (out / 'manifest.json').write_text(json.dumps({'status': 'running'}))
+    assert pending_lines(run, tmp_path) == run_lines(run)                          # unfinished: train stops loudly, nothing guessed
+    (out / 'manifest.json').write_text(json.dumps({'status': 'complete'}))
+    (out / 'video_index.csv').write_text('checkpoint_step,status\n0,ok\n')
+    assert pending_lines(run, tmp_path) == run_lines(run)[1:]                      # trained, not yet evaluated: verify + eval remain
+    (out / 'eval' / 'kinematic' / 'val_v1' / 'step_000200000').mkdir(parents=True)
+    (out / 'eval' / 'kinematic' / 'val_v1' / 'step_000200000' / 'episode_metrics.parquet').write_text('x')
+    assert pending_lines(run, tmp_path) == []                                      # everything exists

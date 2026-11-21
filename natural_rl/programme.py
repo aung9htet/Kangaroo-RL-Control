@@ -103,3 +103,33 @@ def run_lines(run: dict, with_eval: bool = True) -> list:
                   f'python -m natural_rl eval --run-id {rid} --suite test_v1 --manifest configs/eval/test_v1.json',
                   f'python -m natural_rl analyse --run-id {rid}']
     return lines
+
+
+def pending_lines(run: dict, runs_root, with_eval: bool = True) -> list:
+    """`run_lines` minus what the results directory already holds (for `catalog programme --todo`).
+
+    A run whose manifest says `complete` needs no `train` line; a run whose expected outputs all exist (every video `ok`, the
+    validation evaluation of P1, the test evaluation and summary of P2-P4) needs nothing. Runs that are absent or unfinished keep
+    every line, so `train` stops loudly on an unfinished folder instead of this function guessing what to do with it.
+    """
+    import csv
+    import json
+    from pathlib import Path
+    lines = run_lines(run, with_eval)
+    matches = list(Path(runs_root).glob(f'*/*/*/{run["run_id"]}'))
+    if len(matches) != 1 or not (matches[0] / 'manifest.json').exists():
+        return lines
+    out = matches[0]
+    if json.loads((out / 'manifest.json').read_text()).get('status') != 'complete':
+        return lines
+    lines = lines[1:]
+    if not with_eval:
+        return []
+    try:
+        videos_ok = all(r['status'] == 'ok' for r in csv.DictReader(open(out / 'video_index.csv')))
+    except OSError:
+        videos_ok = False
+    evaluated = {'P0': True,
+                 'P1': any((out / 'eval').glob('*/val_v1/step_*/episode_metrics.parquet')),
+                 }.get(run['phase'], any((out / 'eval').glob('*/test_v1/step_*/episode_metrics.parquet')) and (out / 'analysis' / 'summary.csv').exists())
+    return [] if videos_ok and evaluated else lines

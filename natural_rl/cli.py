@@ -71,7 +71,10 @@ def cmd_catalog(args) -> int:
             print(f'# {ph}: {t["runs"]} runs, {t["transitions"] / 1e6:.0f}M transitions, {t["videos"]} checkpoint videos')
             if args.commands or args.with_eval:
                 for r in runs:
-                    for line in programme.run_lines(r, with_eval=args.with_eval):
+                    from .registry import results_root
+                    lines = (programme.pending_lines(r, results_root() / 'runs', args.with_eval) if args.todo
+                             else programme.run_lines(r, with_eval=args.with_eval))
+                    for line in lines:
                         print(line)
         if not args.phase:
             tot = programme.programme_totals()['TOTAL']
@@ -390,6 +393,12 @@ def cmd_analyse(args) -> int:
               file=sys.stderr)
         return 1
     df = pd.concat(frames, ignore_index=True)
+    from .eval import load_scalers, score_frame
+    rescored = []
+    for backend, part in df.groupby('backend', sort=False):
+        scalers = load_scalers(backend)                      # scores come from the raw descriptors, so locking the scalers later is enough
+        rescored.append(score_frame(part, scalers) if scalers is not None else part)
+    df = pd.concat(rescored, ignore_index=True)
     summary = (df.groupby(['backend', 'split', 'checkpoint_step'])
                  .agg(n_tasks=('task_id', 'count'), terminal_hold_rate=('terminal_hold', 'mean'), first_entry_rate=('first_entry', 'mean'),
                       any_hold_rate=('any_hold', 'mean'), final_error_median_m=('final_error_m', 'median'),
@@ -511,6 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument('--policies', help='P3 only: decqn,A,B,C')
     c.add_argument('--commands', action='store_true', help='print every registered train command')
     c.add_argument('--with-eval', action='store_true', help='also print the verify and evaluation lines of every run, in order')
+    c.add_argument('--todo', action='store_true', help='leave out runs and steps whose outputs already exist in results/')
     c.add_argument('--select', action='store_true', help='P3: choose the three controllers from the P2 validation evaluations')
     c.set_defaults(fn=cmd_catalog)
 
@@ -537,6 +547,7 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument('--strict-video', action='store_true', help='abort at the first failed video instead of at the end')
     t.add_argument('--smoke', action='store_true', help='disposable run under results/smoke (never part of main_v1)')
     t.add_argument('--allow-dirty', action='store_true')
+    t.add_argument('--restart', action='store_true', help='an unfinished run of this id is moved to results/abandoned/ and trained again from step 0')
     t.add_argument('--threads', type=int, default=4)
     t.add_argument('--device', default='auto')
     t.add_argument('--set', nargs='*', default=[], metavar='KEY=VALUE', help='override model config values, e.g. hyper.warmup=500')

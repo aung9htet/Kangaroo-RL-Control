@@ -197,7 +197,21 @@ def run_training(args) -> int:
     backend = 'kinematic'
     out = run_dir(backend, args.model, args.reward, args.run_id, smoke)
     if out.exists() and any(out.iterdir()):
-        raise FileExistsError(f'{out} already exists; run ids are never reused or overwritten')
+        previous = json.loads((out / 'manifest.json').read_text()) if (out / 'manifest.json').exists() else {}
+        if previous.get('status') == 'complete':
+            if (previous.get('steps'), previous.get('seed'), previous.get('reward'), previous.get('model')) != \
+                    (args.steps, args.seed, args.reward, args.model):
+                raise FileExistsError(f'{out} is a complete run with a different configuration (steps {previous.get("steps")}, seed '
+                                      f'{previous.get("seed")}); a run id names one configuration, use a new --run-id')
+            print(f'[skip] {args.run_id} is already complete (same model, reward, seed and steps): nothing to train, its results are kept')
+            return 0
+        if not args.restart:
+            raise FileExistsError(f'{out} holds an unfinished run (status {previous.get("status", "unknown")!r}); training cannot resume '
+                                  f'from a checkpoint. Pass --restart to move it aside to results/abandoned/ and train again from step 0')
+        archive = results_root(smoke) / 'abandoned' / f'{args.run_id}-{time.strftime("%Y%m%dT%H%M%S")}'
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        out.rename(archive)
+        print(f'[restart] unfinished run moved to {archive}')
     out.mkdir(parents=True, exist_ok=False)
     steps = scheduled_steps(args.steps, args.checkpoint_every) if args.checkpoint_every else [args.steps]
     disk_preflight(results_root(smoke), len(steps) if args.record_every_checkpoint else 0)

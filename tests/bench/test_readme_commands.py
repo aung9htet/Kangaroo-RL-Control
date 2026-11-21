@@ -69,4 +69,7 @@ def test_the_preamble_commands_parse_too():
     commands_found = re.findall(r'^python -m natural_rl .*$', head, flags=re.M)
     assert len(commands_found) >= 5
     for command in commands_found:
-        parse(re.sub(r'\s+#.*$', '', command))
+        tokens = shlex.split(re.sub(r'\s+#.*$', '', command))
+        if '|' in tokens:                                       # a pipe outside quotes: only the natural_rl command before it is ours
+            tokens = tokens[:tokens.index('|')]
+        parse(shlex.join(tokens))
