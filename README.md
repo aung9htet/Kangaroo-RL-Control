@@ -60,67 +60,89 @@ when it is available; the other controllers default to CPU.
 
 ## 2. The problem: state, action, transition, reward
 
-The controlled chain has 7 joints (5 arm joints and the 2 wrist joints of the RH8D hand). The *reach point* $p(q)\in\mathbb R^3$ is the hand's
-manipulation link in the robot base frame ($x$ forward, $y$ left, $z$ up, metres). A goal $g\in\mathbb R^3$ is a point above the table.
+The controlled chain has 7 joints (5 arm joints and the 2 wrist joints of the RH8D hand). The *reach point* `p(q) ∈ ℝ³` is the hand's
+manipulation link in the robot base frame (`x` forward, `y` left, `z` up, metres). A goal `g ∈ ℝ³` is a point above the table.
 
-**State.** The joint angles and the goal, $s_t=(q_t,\,g)$ with $q_t\in\mathbb R^7$ (rad). Each joint is normalised to $[-1,1]$ over its range and
-every normalised value $x$ is encoded with a sinusoidal positional encoding of $L=4$ frequencies:
+**State.** The joint angles and the goal, `s_t=(q_t, g)` with `q_t ∈ ℝ⁷` (rad). Each joint is normalised to `[-1,1]` over its range and
+every normalised value `x` is encoded with a sinusoidal positional encoding of `L=4` frequencies:
 
 $$
-\tilde q_j=2\,\frac{q_j-q_j^{\min}}{q_j^{\max}-q_j^{\min}}-1,\qquad
-\phi(x)=\big[\,x,\ \sin(2^{0}\pi x),\cos(2^{0}\pi x),\ \dots,\ \sin(2^{3}\pi x),\cos(2^{3}\pi x)\,\big].
+\tilde q_j=2\,\frac{q_j-q_j^{\min}}{q_j^{\max}-q_j^{\min}}-1
+$$
+
+$$
+\phi(x)=\big[\,x,\ \sin(2^{0}\pi x),\cos(2^{0}\pi x),\ \dots,\ \sin(2^{3}\pi x),\cos(2^{3}\pi x)\,\big]
 $$
 
 The goal is part of the state so a single policy serves every goal. Two observation vectors are used:
 
 | Name | Content | Size |
 | --- | --- | --- |
-| `obs_v1` (historical reproduction only) | $\phi(\tilde q)\,\Vert\,\phi(\tilde g)$ | $63+27=90$ |
-| `obs_v2` (every benchmark run) | $\phi(\tilde q)\,\Vert\,\phi(\tilde g)\,\Vert\,v_{t-1}/v_{\max}\,\Vert\,\min(c_t,5)/5\,\Vert\,h_t$ | $90+7+1+1=99$ |
+| `obs_v1` (historical reproduction only) | `φ(q̃), φ(g̃)` | `63+27=90` |
+| `obs_v2` (every benchmark run) | `φ(q̃), φ(g̃), v_(t-1)/v_max, min(c_t,5)/5, h_t` | `90+7+1+1=99` |
 
-In `obs_v2`, $v_{t-1}$ is the previous command, $c_t$ the number of consecutive accepted positions within 2 cm of the goal (the *dwell counter*)
-and $h_t\in\lbrace0,1\rbrace$ whether a 5-step hold has already been completed. They make the hold-aware rewards Markov.
+In `obs_v2`, `v_(t-1)` is the previous command, `c_t` the number of consecutive accepted positions within 2 cm of the goal (the *dwell counter*)
+and `h_t ∈ {0,1}` whether a 5-step hold has already been completed. They make the hold-aware rewards Markov.
 
-**Action.** Seven joint-velocity commands bounded by $v_{\max}=1$ rad/s, applied for one decision of $\Delta t=0.05$ s (20 Hz):
+**Action.** Seven joint-velocity commands bounded by `v_max=1` rad/s, applied for one decision of `Δt=0.05` s (20 Hz):
 
-* *Discrete controllers* choose one bin per joint: $v_j=v_{\max}\,b_{k_j}$ with $b=(-1,-0.3,-0.1,0,0.1,0.3,1)$ and $k_j\in\lbrace0,\dots,6\rbrace$,
-  i.e. $7^7=823{,}543$ joint actions.
-* *Continuous controllers* output $a\in[-1,1]^7$ with $v=v_{\max}\mathrm{clip}(a,-1,1)$.
+* *Discrete controllers* choose one bin per joint: `v_j=v_max·b_(k_j)` with `b=(-1,-0.3,-0.1,0,0.1,0.3,1)` and `k_j ∈ {0,…,6}`,
+  i.e. `7⁷=823,543` joint actions.
+* *Continuous controllers* output `a ∈ [-1,1]⁷` with `v=v_max·clip(a,-1,1)`.
 
 **Transition.** The commanded velocity is integrated for one decision and clipped to the joint limits; if the arm at the clipped pose
 penetrates the table or the robot, the whole move is rejected:
 
 $$
-\hat q=\mathrm{clip}\!\big(q+\Delta t\,v,\ q^{\min},q^{\max}\big),\qquad
+\hat q=\mathrm{clip}\!\big(q+\Delta t\,v,\ q^{\min},q^{\max}\big)
+$$
+
+$$
 q'=\begin{cases}q & \text{if the arm at }\hat q\text{ collides (move rejected, collision flag }c=1)\\ \hat q & \text{otherwise.}\end{cases}
 $$
 
 The goal never changes within an episode. Collisions are tested with MuJoCo on a filtered copy of the compiled model (right arm against the
 table and the rest of the robot). Joint clipping and collision rejection are always active, under every reward profile.
 
-**Episode and objective.** An episode has $H=100$ decisions (5 s). There are no terminal states: the time limit is a *truncation*, so
-bootstrapping continues from the true final state. All controllers maximise the discounted return with $\gamma=0.95$:
+**Episode and objective.** An episode has `H=100` decisions (5 s). There are no terminal states: the time limit is a *truncation*, so
+bootstrapping continues from the true final state. All controllers maximise the discounted return with `γ=0.95`:
 
 $$
-J(\pi)=\mathbb E_\pi\Big[\sum_{t=0}^{H-1}\gamma^{t}\,r_t\Big].
+J(\pi)=\mathbb E_\pi\Big[\sum_{t=0}^{H-1}\gamma^{t}\,r_t\Big]
 $$
 
 **Hindsight goal relabelling** (used by every off-policy controller). An episode that misses its goal still shows how to reach every point the
 hand passed through. With probability 0.8 a sampled transition gets the goal replaced by a position reached later in the same episode:
 
 $$
-\tilde g=p(q_{t'}),\quad t'\sim\mathcal U\lbrace t,\dots,H-1\rbrace,\qquad \tilde r_i=r(\,\cdot\,;\tilde g\,)\ \text{recomputed}.
+\tilde g=p(q_{t'})
 $$
 
-This is valid because the transition $(q',c)$ does not depend on the goal; only the reward does, so rewards are never stored. Because the
+$$
+t'\sim\mathcal U\lbrace t,\dots,H-1\rbrace
+$$
+
+$$
+\tilde r_i=r(\,\cdot\,;\tilde g\,)\ \text{recomputed}
+$$
+
+This is valid because the transition `(q',c)` does not depend on the goal; only the reward does, so rewards are never stored. Because the
 rewards and observations contain *history*, relabelling recomputes them from step 0 of the episode for the new goal:
 
 $$
-d_t=\lVert p_{t}-\tilde g\rVert,\quad c_t=(c_{t-1}+1)\,\mathbb 1[d_t\le 0.02\,\mathrm m],\quad h_t=\mathbb 1\big[\max_{s\le t}c_s\ge 5\big],
+d_t=\lVert p_{t}-\tilde g\rVert
 $$
 
-and the $n$-step return used by the value-based methods is $R_t^{(m)}=\sum_{i=0}^{m-1}\gamma^{i}\tilde r_{t+i}$ with $m=\min(n,H-t)$, bootstrapping
-with $\gamma^{m}$.
+$$
+c_t=(c_{t-1}+1)\,\mathbb 1[d_t\le 0.02\,\mathrm m]
+$$
+
+$$
+h_t=\mathbb 1\big[\max_{s\le t}c_s\ge 5\big]
+$$
+
+and the `n`-step return used by the value-based methods is `R_t(m) = Σ_(i=0..m-1) γ^i r̃_(t+i)` with `m=min(n,H-t)`, bootstrapping
+with `γ^m`.
 
 ---
 
@@ -131,10 +153,10 @@ manifests, actuator limits, safety rules and evaluation code.
 
 | ID | Family | Action | Learns | Exploration | Goal relabelling |
 | --- | --- | --- | --- | --- | --- |
-| `decqn` | value-based, factored | 7 bins x 7 joints | decoupled Q | per-joint $\varepsilon$-greedy | yes |
-| `growing_q` | value-based, factored | 2→3→5→7 bins x 7 joints | decoupled Q with masking | per-joint $\varepsilon$-greedy on active bins | yes |
+| `decqn` | value-based, factored | 7 bins x 7 joints | decoupled Q | per-joint `ε`-greedy | yes |
+| `growing_q` | value-based, factored | 2→3→5→7 bins x 7 joints | decoupled Q with masking | per-joint `ε`-greedy on active bins | yes |
 | `ppo_md` | on-policy actor-critic | 7 bins x 7 joints | categorical policy | policy sampling | no |
-| `ppo_box` | on-policy actor-critic | Box $[-1,1]^7$ | Gaussian policy | policy sampling | no |
+| `ppo_box` | on-policy actor-critic | Box `[-1,1]⁷` | Gaussian policy | policy sampling | no |
 | `sac` | off-policy actor-critic | Box | max-entropy policy | stochastic policy | yes |
 | `td3` | off-policy actor-critic | Box | deterministic policy | Gaussian noise | yes |
 | `tqc` | off-policy actor-critic | Box | distributional critics | stochastic policy | yes |
@@ -152,25 +174,36 @@ prints the whole registered programme).
 
 *Seyde et al., Solving Continuous Control via Q-learning, ICLR 2023.* https://arxiv.org/abs/2210.12566
 
-**What it does.** A value-based method for many action dimensions. A full joint action has $7^7$ combinations, far too many to evaluate, so the
+**What it does.** A value-based method for many action dimensions. A full joint action has `7⁷` combinations, far too many to evaluate, so the
 Q-function is *decoupled*: the network outputs one utility per joint and per bin and the value of a joint action is their mean. The best joint
-action is then simply the best bin of every joint, found with $7\times7$ evaluations and exactly equal to the arg-max over all $7^7$ actions.
+action is then simply the best bin of every joint, found with `7×7` evaluations and exactly equal to the arg-max over all `7⁷` actions.
 
-**Network.** `obs_v2` (99) → 256 → 256 (LayerNorm, ReLU) → 49 utilities $U_j(s,k)$.
-
-$$
-Q_\theta(s,a)=\frac1J\sum_{j=1}^{J}U_j(s,a_j;\theta),\qquad a^*_j=\arg\max_k U_j(s,k;\theta).
-$$
-
-**Learning.** Double-Q with $n=3$-step returns from the relabelled replay, Huber loss on the joint action actually taken, Polyak-averaged target
-network ($\tau=0.005$), gradient clipping at 10, Adam $3\times10^{-4}$, batch 256, targets clipped to the reward bounds divided by $1-\gamma$:
+**Network.** `obs_v2` (99) → 256 → 256 (LayerNorm, ReLU) → 49 utilities `U_j(s,k)`.
 
 $$
-y=\sum_{i=0}^{m-1}\gamma^{i}\tilde r_{t+i}+\gamma^{m}\,Q_{\theta^-}\!\big(s_{t+m},\hat a\big),\quad \hat a_j=\arg\max_k U_j(s_{t+m},k;\theta),
-\qquad \mathcal L(\theta)=\mathrm{Huber}\!\big(y-Q_\theta(s_t,a_t)\big).
+Q_\theta(s,a)=\frac1J\sum_{j=1}^{J}U_j(s,a_j;\theta)
 $$
 
-**Exploration.** Per joint, $\varepsilon$ falls linearly from 1 to 0.02 over the first 15 % of training; an exploring joint repeats one random
+$$
+a^*_j=\arg\max_k U_j(s,k;\theta)
+$$
+
+**Learning.** Double-Q with `n=3`-step returns from the relabelled replay, Huber loss on the joint action actually taken, Polyak-averaged target
+network (`τ=0.005`), gradient clipping at 10, Adam `3×10⁻⁴`, batch 256, targets clipped to the reward bounds divided by `1-γ`:
+
+$$
+y=\sum_{i=0}^{m-1}\gamma^{i}\tilde r_{t+i}+\gamma^{m}\,Q_{\theta^-}\!\big(s_{t+m},\hat a\big)
+$$
+
+$$
+\hat a_j=\arg\max_k U_j(s_{t+m},k;\theta)
+$$
+
+$$
+\mathcal L(\theta)=\mathrm{Huber}\!\big(y-Q_\theta(s_t,a_t)\big)
+$$
+
+**Exploration.** Per joint, `ε` falls linearly from 1 to 0.02 over the first 15 % of training; an exploring joint repeats one random
 bin for 1-10 decisions so random motion travels instead of jittering. 16 environments run in parallel, with 4 gradient updates per 16 transitions
 and 10,000 random warm-up transitions.
 
@@ -190,28 +223,30 @@ python -m natural_rl export --run-id decqn-r7-s00 --kind trajectories --suite te
 python -m natural_rl results locate --run-id decqn-r7-s00
 ```
 
-
 ### growing_q: Growing Q-Networks
 
 *Seyde et al., Growing Q-networks: Solving continuous control tasks with adaptive control resolution, L4DC 2024.* https://proceedings.mlr.press/v242/seyde24a.html
 
 **What it does.** DecQN that starts with a very coarse action set and refines it during training. Coarse control (bang-bang) explores quickly and
 is easy to learn; fine control is needed later for precision. The network always has all seven bins, but only an *active subset*
-$\mathcal A_g\subseteq\lbrace0,\dots,6\rbrace$ may be chosen: masking is applied to the greedy action, to the epsilon-greedy exploration and to the maximum
+`A_g ⊆ {0,…,6}` may be chosen: masking is applied to the greedy action, to the epsilon-greedy exploration and to the maximum
 in the Double-Q target:
 
 $$
-\hat a_j=\arg\max_{k\in\mathcal A_g}U_j(s_{t+m},k;\theta),\qquad
-y=\sum_{i<m}\gamma^{i}\tilde r_{t+i}+\gamma^{m}\,\frac1J\sum_{j}U_j(s_{t+m},\hat a_j;\theta^-).
+\hat a_j=\arg\max_{k\in\mathcal A_g}U_j(s_{t+m},k;\theta)
+$$
+
+$$
+y=\sum_{i<m}\gamma^{i}\tilde r_{t+i}+\gamma^{m}\,\frac1J\sum_{j}U_j(s_{t+m},\hat a_j;\theta^-)
 $$
 
 **Schedule.** The paper's linear schedule on nested subsets of the seven historical levels, growing at 20 %, 40 % and 60 % of training:
 
 | Stage | Active velocities (rad/s) | Bins |
 | --- | --- | --- |
-| 0 | $\lbrace-1,+1\rbrace$ | 2 |
-| 1 | $\lbrace-1,0,+1\rbrace$ | 3 |
-| 2 | $\lbrace-1,-0.3,0,0.3,1\rbrace$ | 5 |
+| 0 | `{-1,+1}` | 2 |
+| 1 | `{-1,0,+1}` | 3 |
+| 2 | `{-1,-0.3,0,0.3,1}` | 5 |
 | 3 | all seven | 7 |
 
 The active set is saved inside every checkpoint (a replay acts at the resolution the checkpoint had) and the active resolution is logged at
@@ -233,7 +268,6 @@ python -m natural_rl export --run-id growing_q-r7-s00 --kind trajectories --suit
 python -m natural_rl results locate --run-id growing_q-r7-s00
 ```
 
-
 ### ppo_md: PPO with MultiDiscrete actions
 
 *Schulman et al., Proximal Policy Optimization Algorithms, 2017.* https://arxiv.org/abs/1707.06347
@@ -241,20 +275,30 @@ python -m natural_rl results locate --run-id growing_q-r7-s00
 **What it does.** An on-policy actor-critic. It collects fresh rollouts with the current policy and improves it with a clipped surrogate objective that
 keeps each update close to the policy that gathered the data. No replay buffer, so no goal relabelling.
 
-**Policy.** Seven independent categorical distributions over the 7 bins (one per joint), $\pi_\theta(a\mid s)=\prod_{j}\mathrm{Cat}(a_j;\mathrm{softmax}\ell_j(s))$,
-and a separate value network $V_\psi(s)$; both are MLPs with two layers of 256.
+**Policy.** Seven independent categorical distributions over the 7 bins (one per joint), `π_θ(a∣ s)=Π_jCat(a_j;softmaxℓ_j(s))`,
+and a separate value network `V_ψ(s)`; both are MLPs with two layers of 256.
 
 $$
-\mathcal L^{\text{CLIP}}=\mathbb E_t\Big[\min\big(\rho_t\hat A_t,\ \mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon)\,\hat A_t\big)\Big],\qquad
-\rho_t=\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\text{old}}}(a_t\mid s_t)},
+\mathcal L^{\text{CLIP}}=\mathbb E_t\Big[\min\big(\rho_t\hat A_t,\ \mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon)\,\hat A_t\big)\Big]
 $$
 
 $$
-\hat A_t=\sum_{l\ge0}(\gamma\lambda)^{l}\delta_{t+l},\qquad \delta_t=r_t+\gamma V_\psi(s_{t+1})-V_\psi(s_t),\qquad
-\mathcal L^{V}=\big(V_\psi(s_t)-\hat R_t\big)^2 .
+\rho_t=\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\text{old}}}(a_t\mid s_t)}
 $$
 
-**Settings.** $\epsilon=0.2$, $\lambda=0.95$, 16 environments x 256 steps = 4096 transitions per update, 10 epochs, minibatch 256, entropy
+$$
+\hat A_t=\sum_{l\ge0}(\gamma\lambda)^{l}\delta_{t+l}
+$$
+
+$$
+\delta_t=r_t+\gamma V_\psi(s_{t+1})-V_\psi(s_t)
+$$
+
+$$
+\mathcal L^{V}=\big(V_\psi(s_t)-\hat R_t\big)^2
+$$
+
+**Settings.** `ε=0.2`, `λ=0.95`, 16 environments x 256 steps = 4096 transitions per update, 10 epochs, minibatch 256, entropy
 coefficient 0. At the 100-decision time limit the value of the final observation is bootstrapped (truncation, not termination).
 
 Registered settings: `configs/models/ppo_md.yaml`.
@@ -273,7 +317,6 @@ python -m natural_rl export --run-id ppo_md-r7-s00 --kind trajectories --suite t
 python -m natural_rl results locate --run-id ppo_md-r7-s00
 ```
 
-
 ### ppo_box: PPO with continuous actions
 
 *Schulman et al., Proximal Policy Optimization Algorithms, 2017.* https://arxiv.org/abs/1707.06347
@@ -282,7 +325,11 @@ python -m natural_rl results locate --run-id ppo_md-r7-s00
 The policy is a diagonal Gaussian over the seven normalised velocities,
 
 $$
-a\sim\mathcal N\big(\mu_\theta(s),\mathrm{diag}\sigma^2\big),\qquad v=v_{\max}\mathrm{clip}(a,-1,1),
+a\sim\mathcal N\big(\mu_\theta(s),\mathrm{diag}\sigma^2\big)
+$$
+
+$$
+v=v_{\max}\mathrm{clip}(a,-1,1)
 $$
 
 with a state-independent learned log-standard-deviation. Comparing it with `ppo_md` isolates the effect of the action representation inside the
@@ -304,30 +351,35 @@ python -m natural_rl export --run-id ppo_box-r7-s00 --kind trajectories --suite 
 python -m natural_rl results locate --run-id ppo_box-r7-s00
 ```
 
-
 ### sac: Soft Actor-Critic
 
 *Haarnoja et al., Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor, ICML 2018.* https://proceedings.mlr.press/v80/haarnoja18b.html
 
 **What it does.** An off-policy actor-critic that maximises return *and* policy entropy, which keeps exploration alive and makes training stable.
-The actor is a squashed Gaussian; two critics $Q_{\phi_1},Q_{\phi_2}$ (2 x 256 MLPs) with Polyak-averaged targets counter over-estimation.
+The actor is a squashed Gaussian; two critics `Q_φ1, Q_φ2` (2 x 256 MLPs) with Polyak-averaged targets counter over-estimation.
 
 $$
-J(\pi)=\mathbb E\Big[\sum_t\gamma^{t}\big(r_t+\alpha\,\mathcal H(\pi(\cdot\mid s_t))\big)\Big],
-$$
-
-$$
-y=\tilde r+\gamma\Big(\min_{i}Q_{\bar\phi_i}(s',a')-\alpha\log\pi(a'\mid s')\Big),\ a'\sim\pi(\cdot\mid s'),\qquad
-\mathcal L_Q=\sum_i\big(Q_{\phi_i}(s,a)-y\big)^2,
+J(\pi)=\mathbb E\Big[\sum_t\gamma^{t}\big(r_t+\alpha\,\mathcal H(\pi(\cdot\mid s_t))\big)\Big]
 $$
 
 $$
-\mathcal L_\pi=\mathbb E\big[\alpha\log\pi(a\mid s)-\min_iQ_{\phi_i}(s,a)\big],\qquad
-\mathcal L_\alpha=-\alpha\,\big(\log\pi(a\mid s)+\bar{\mathcal H}\big),\ \ \bar{\mathcal H}=-\dim\mathcal A=-7 .
+y=\tilde r+\gamma\Big(\min_{i}Q_{\bar\phi_i}(s',a')-\alpha\log\pi(a'\mid s')\Big),\ a'\sim\pi(\cdot\mid s')
 $$
 
-The temperature $\alpha$ is tuned automatically toward the target entropy. One gradient update per environment transition (update-to-data ratio 1),
-10,000 random warm-up transitions, batch 256, learning rate $3\times10^{-4}$, $\tau=0.005$, relabelled replay. Evaluation and videos use the
+$$
+\mathcal L_Q=\sum_i\big(Q_{\phi_i}(s,a)-y\big)^2
+$$
+
+$$
+\mathcal L_\pi=\mathbb E\big[\alpha\log\pi(a\mid s)-\min_iQ_{\phi_i}(s,a)\big]
+$$
+
+$$
+\mathcal L_\alpha=-\alpha\,\big(\log\pi(a\mid s)+\bar{\mathcal H}\big),\ \ \bar{\mathcal H}=-\dim\mathcal A=-7
+$$
+
+The temperature `α` is tuned automatically toward the target entropy. One gradient update per environment transition (update-to-data ratio 1),
+10,000 random warm-up transitions, batch 256, learning rate `3×10⁻⁴`, `τ=0.005`, relabelled replay. Evaluation and videos use the
 deterministic mean action.
 
 Registered settings: `configs/models/sac.yaml`.
@@ -346,24 +398,30 @@ python -m natural_rl export --run-id sac-r7-s00 --kind trajectories --suite test
 python -m natural_rl results locate --run-id sac-r7-s00
 ```
 
-
 ### td3: Twin Delayed DDPG
 
 *Fujimoto, van Hoof and Meger, Addressing Function Approximation Error in Actor-Critic Methods, ICML 2018.* https://proceedings.mlr.press/v80/fujimoto18a.html
 
-**What it does.** An off-policy actor-critic with a *deterministic* actor $\mu_\psi(s)$ and three devices against value over-estimation: twin critics
+**What it does.** An off-policy actor-critic with a *deterministic* actor `μ_ψ(s)` and three devices against value over-estimation: twin critics
 (take the minimum), target-policy smoothing, and delayed actor updates.
 
 $$
-y=\tilde r+\gamma\min_{i}Q_{\bar\phi_i}\!\big(s',\ \mathrm{clip}(\mu_{\bar\psi}(s')+\epsilon,-1,1)\big),\qquad
-\epsilon=\mathrm{clip}\!\big(\mathcal N(0,0.2^{2}),-0.5,0.5\big),
+y=\tilde r+\gamma\min_{i}Q_{\bar\phi_i}\!\big(s',\ \mathrm{clip}(\mu_{\bar\psi}(s')+\epsilon,-1,1)\big)
 $$
 
 $$
-\mathcal L_Q=\sum_i\big(Q_{\phi_i}(s,a)-y\big)^2,\qquad \mathcal L_\mu=-\,\mathbb E\big[Q_{\phi_1}(s,\mu_\psi(s))\big]\ \text{every 2 critic updates.}
+\epsilon=\mathrm{clip}\!\big(\mathcal N(0,0.2^{2}),-0.5,0.5\big)
 $$
 
-Exploration noise $\mathcal N(0,0.1^{2})$ is added to the actor's action during training only. Other settings as SAC.
+$$
+\mathcal L_Q=\sum_i\big(Q_{\phi_i}(s,a)-y\big)^2
+$$
+
+$$
+\mathcal L_\mu=-\,\mathbb E\big[Q_{\phi_1}(s,\mu_\psi(s))\big]\ \text{every 2 critic updates.}
+$$
+
+Exploration noise `N(0,0.1²)` is added to the actor's action during training only. Other settings as SAC.
 
 Registered settings: `configs/models/td3.yaml`.
 
@@ -381,25 +439,30 @@ python -m natural_rl export --run-id td3-r7-s00 --kind trajectories --suite test
 python -m natural_rl results locate --run-id td3-r7-s00
 ```
 
-
 ### tqc: Truncated Quantile Critics
 
 *Kuznetsov et al., Controlling Overestimation Bias with Truncated Mixture of Continuous Distributional Quantile Critics, ICML 2020.* https://proceedings.mlr.press/v119/kuznetsov20a.html
 
-**What it does.** SAC with *distributional* critics. Each of 5 critics predicts $N=25$ quantiles of the return distribution. To control over-estimation
-the largest atoms are discarded before forming the target: all $5\times25$ next-state atoms are pooled and sorted, and the top $5\times2=10$ are dropped.
+**What it does.** SAC with *distributional* critics. Each of 5 critics predicts `N=25` quantiles of the return distribution. To control over-estimation
+the largest atoms are discarded before forming the target: all `5×25` next-state atoms are pooled and sorted, and the top `5×2=10` are dropped.
 
 $$
-\mathcal Z=\mathrm{sort}\big\lbrace z^{n,m}_{\bar\phi}(s',a')\big\rbrace_{n\le5,\,m\le25},\qquad
-y_i=\tilde r+\gamma\big(z_{(i)}-\alpha\log\pi(a'\mid s')\big),\ \ i=1,\dots,115,
+\mathcal Z=\mathrm{sort}\big\lbrace z^{n,m}_{\bar\phi}(s',a')\big\rbrace_{n\le5,\,m\le25}
 $$
 
 $$
-\mathcal L=\sum_{n,i,m}\rho^{H}_{\tau_m}\!\big(y_i-z^{n,m}_\phi(s,a)\big),\qquad
-\mathcal L_\pi=\mathbb E\Big[\alpha\log\pi(a\mid s)-\tfrac1{5\cdot25}\sum_{n,m}z^{n,m}_\phi(s,a)\Big],
+y_i=\tilde r+\gamma\big(z_{(i)}-\alpha\log\pi(a'\mid s')\big),\ \ i=1,\dots,115
 $$
 
-where $\rho^{H}_\tau$ is the quantile Huber loss and $\tau_m$ the quantile midpoints. Temperature, update ratio and relabelled replay as in SAC.
+$$
+\mathcal L=\sum_{n,i,m}\rho^{H}_{\tau_m}\!\big(y_i-z^{n,m}_\phi(s,a)\big)
+$$
+
+$$
+\mathcal L_\pi=\mathbb E\Big[\alpha\log\pi(a\mid s)-\tfrac1{5\cdot25}\sum_{n,m}z^{n,m}_\phi(s,a)\Big]
+$$
+
+where `ρ_τ^H` is the quantile Huber loss and `τ_m` the quantile midpoints. Temperature, update ratio and relabelled replay as in SAC.
 
 Registered settings: `configs/models/tqc.yaml`.
 
@@ -417,20 +480,22 @@ python -m natural_rl export --run-id tqc-r7-s00 --kind trajectories --suite test
 python -m natural_rl results locate --run-id tqc-r7-s00
 ```
 
-
 ### crossq: CrossQ
 
 *Bhatt et al., CrossQ: Batch Normalization in Deep Reinforcement Learning for Greater Sample Efficiency and Simplicity, ICLR 2024.* https://proceedings.iclr.cc/paper_files/paper/2024/hash/f381114cf5aba4e45552869863deaaa7-Abstract-Conference.html
 
 **What it does.** A SAC-style learner that removes the target networks. Stability comes from adding batch normalisation to the critics and evaluating
-$(s,a)$ and $(s',a')$ in a *single joint forward pass*, so the normalisation statistics mix on-policy and off-policy samples:
+`(s,a)` and `(s',a')` in a *single joint forward pass*, so the normalisation statistics mix on-policy and off-policy samples:
 
 $$
-\big[Q(s,a),\,Q(s',a')\big]=Q_\phi\big([\,(s,a);(s',a')\,]\big),\qquad
-y=\tilde r+\gamma\Big(\mathrm{sg}\big[\min_iQ_i(s',a')\big]-\alpha\log\pi(a'\mid s')\Big),
+\big[Q(s,a),\,Q(s',a')\big]=Q_\phi\big([\,(s,a);(s',a')\,]\big)
 $$
 
-and the critic loss is the squared error to $y$ with gradients only through $Q(s,a)$. The actor maximises the same entropy-regularised value. All
+$$
+y=\tilde r+\gamma\Big(\mathrm{sg}\big[\min_iQ_i(s',a')\big]-\alpha\log\pi(a'\mid s')\Big)
+$$
+
+and the critic loss is the squared error to `y` with gradients only through `Q(s,a)`. The actor maximises the same entropy-regularised value. All
 library defaults of the sb3-contrib implementation (wide critics, policy delay, learning rate, batch-norm momentum) are used and recorded in
 `config_resolved.yaml`; replay, relabelling and update ratio follow the other off-policy methods.
 
@@ -450,7 +515,6 @@ python -m natural_rl export --run-id crossq-r7-s00 --kind trajectories --suite t
 python -m natural_rl results locate --run-id crossq-r7-s00
 ```
 
-
 ### tdmpc2: TD-MPC2
 
 *Hansen, Su and Wang, TD-MPC2: Scalable, Robust World Models for Continuous Control, ICLR 2024.* https://proceedings.iclr.cc/paper_files/paper/2024/hash/cf73d57b6dcda32b293df7c2d5341f49-Abstract-Conference.html
@@ -460,30 +524,37 @@ reading it from a policy network. Components (smallest official preset, 1M param
 
 | Component | Maps | Role |
 | --- | --- | --- |
-| encoder $h_\theta$ | $s\mapsto z$ | embeds the observation in a normalised latent space |
-| dynamics $d_\theta$ | $(z,a)\mapsto z'$ | predicts the next latent |
-| reward head $R_\theta$ | $(z,a)\mapsto\hat r$ | discrete regression over 101 bins |
-| value heads $Q_\theta$ | $(z,a)\mapsto\hat q$ | discrete regression, ensemble with target copies |
-| policy prior $\pi_\theta$ | $z\mapsto a$ | proposes actions to the planner, trained by maximum entropy |
+| encoder `h_θ` | `s ↦ z` | embeds the observation in a normalised latent space |
+| dynamics `d_θ` | `(z,a) ↦ z'` | predicts the next latent |
+| reward head `R_θ` | `(z,a) ↦ r̂` | discrete regression over 101 bins |
+| value heads `Q_θ` | `(z,a) ↦ q̂` | discrete regression, ensemble with target copies |
+| policy prior `π_θ` | `z ↦ a` | proposes actions to the planner, trained by maximum entropy |
 
-**Model learning.** Windows of $H_p=3$ consecutive steps come from the relabelled replay (each window with its own relabelled goal, with dwell and
-rewards recomputed over the window). With $z_0=h_\theta(s_0)$, $z_{t+1}=d_\theta(z_t,a_t)$ and $\rho=0.5$:
+**Model learning.** Windows of `H_p=3` consecutive steps come from the relabelled replay (each window with its own relabelled goal, with dwell and
+rewards recomputed over the window). With `z_0=h_θ(s_0)`, `z_(t+1)=d_θ(z_t,a_t)` and `ρ=0.5`:
 
 $$
 \mathcal L=\sum_{t=0}^{H_p-1}\rho^{t}\Big(c_{1}\,\big\Vert z_{t+1}-\mathrm{sg}\,h_\theta(s_{t+1})\big\Vert_2^2
-+c_{2}\mathrm{CE}\!\big(\hat r_t,r_t\big)+c_{3}\mathrm{CE}\!\big(\hat q_t,\mathrm{sg}\,y_t\big)\Big),
++c_{2}\mathrm{CE}\!\big(\hat r_t,r_t\big)+c_{3}\mathrm{CE}\!\big(\hat q_t,\mathrm{sg}\,y_t\big)\Big)
 $$
 
 $$
-y_t=r_t+\gamma\,\bar Q_\theta\big(z_{t+1},\pi_\theta(z_{t+1})\big),\qquad c_1=20,\ c_2=c_3=0.1 .
+y_t=r_t+\gamma\,\bar Q_\theta\big(z_{t+1},\pi_\theta(z_{t+1})\big)
 $$
 
-**Planning (MPPI).** At every decision the agent samples $N=512$ action sequences of length $H_p=3$ (24 of them from the policy prior), scores each in the
+$$
+c_1=20,\ c_2=c_3=0.1
+$$
+
+**Planning (MPPI).** At every decision the agent samples `N=512` action sequences of length `H_p=3` (24 of them from the policy prior), scores each in the
 latent model, keeps the 64 best and refits a Gaussian over sequences, for 6 iterations, then executes the first action:
 
 $$
-\hat G(a_{0:H_p-1})=\sum_{t=0}^{H_p-1}\gamma^{t}R_\theta(z_t,a_t)+\gamma^{H_p}\,Q_\theta\big(z_{H_p},\pi_\theta(z_{H_p})\big),\qquad
-w_i\propto\exp\!\big(\tau(\hat G_i-\max\hat G)\big),\ \tau=0.5 .
+\hat G(a_{0:H_p-1})=\sum_{t=0}^{H_p-1}\gamma^{t}R_\theta(z_t,a_t)+\gamma^{H_p}\,Q_\theta\big(z_{H_p},\pi_\theta(z_{H_p})\big)
+$$
+
+$$
+w_i\propto\exp\!\big(\tau(\hat G_i-\max\hat G)\big),\ \tau=0.5
 $$
 
 One environment is used (the planner handles one observation at a time), with 1,000 random seed transitions, a pretraining pass of 1,000 updates, then one
@@ -507,7 +578,6 @@ python -m natural_rl export --run-id tdmpc2-r7-s00 --kind trajectories --suite t
 python -m natural_rl results locate --run-id tdmpc2-r7-s00
 ```
 
-
 ### sac_pidlag: SAC with PID-Lagrangian cost budgets
 
 *SAC: Haarnoja et al., ICML 2018. PID Lagrangian: Stooke, Achiam and Abbeel, Responsive Safety in Reinforcement Learning by PID Lagrangian Methods, ICML 2020.*
@@ -518,27 +588,42 @@ pre-clip joint-limit attempt (counted on the proposed motion, so rejected or cli
 attributed to either paper alone.
 
 $$
-\max_\pi\ J_r(\pi)\quad\text{s.t.}\quad J_c(\pi)=\mathbb E\Big[\sum_{t=0}^{H-1}c_t\Big]\le d,\qquad c_t=\mathbb 1[\text{collision attempt}]+\mathbb 1[\text{limit attempt}],
+\max_\pi\ J_r(\pi)\quad\text{s.t.}\quad J_c(\pi)=\mathbb E\Big[\sum_{t=0}^{H-1}c_t\Big]\le d
 $$
 
-with $d=0.50$ (`budget_moderate_v1`) or $d=0.10$ (`budget_strict_v1`) events per episode. A second pair of critics learns the discounted cost,
-$y_c=c+\gamma\,\bar Q_c(s',a')$, and the actor maximises the normalised Lagrangian:
-
 $$
-\mathcal L_\pi=\mathbb E\Big[\alpha\log\pi(a\mid s)-\frac{\min_iQ_{r,i}(s,a)-\lambda\,\bar Q_c(s,a)}{1+\lambda}\Big].
+c_t=\mathbb 1[\text{collision attempt}]+\mathbb 1[\text{limit attempt}]
 $$
 
-Here $\bar Q_c$ is the mean of the two cost critics (of the two target cost critics inside $y_c$).
+with `d=0.50` (`budget_moderate_v1`) or `d=0.10` (`budget_strict_v1`) events per episode. A second pair of critics learns the discounted cost,
+`y_c=c+γ Q̄_c(s',a')`, and the actor maximises the normalised Lagrangian:
 
-The multiplier follows a PID rule on a smoothed measurement $\hat J_c$ of the undiscounted episodic cost (exponential average, $\alpha_{\mathrm{ema}}=0.05$), updated
+$$
+\mathcal L_\pi=\mathbb E\Big[\alpha\log\pi(a\mid s)-\frac{\min_iQ_{r,i}(s,a)-\lambda\,\bar Q_c(s,a)}{1+\lambda}\Big]
+$$
+
+Here `Q̄_c` is the mean of the two cost critics (of the two target cost critics inside `y_c`).
+
+The multiplier follows a PID rule on a smoothed measurement `Ĵ_c` of the undiscounted episodic cost (exponential average, `α_ema=0.05`), updated
 after every block of finished episodes:
 
 $$
-e_k=\hat J_{c,k}-d,\quad I_{k+1}=\max(0,I_k+e_k),\quad D_k=\max(0,\hat J_{c,k}-\hat J_{c,k-1}),\quad
-\lambda_{k+1}=\mathrm{clip}\big(K_Pe_k+K_II_{k+1}+K_DD_k,\ 0,\ 100\big),
+e_k=\hat J_{c,k}-d
 $$
 
-with $K_P=0.1$, $K_I=0.01$, $K_D=0.01$. The budget bounds the *expected* cost; it is not a per-episode or zero-event guarantee, and joint clipping and collision
+$$
+I_{k+1}=\max(0,I_k+e_k)
+$$
+
+$$
+D_k=\max(0,\hat J_{c,k}-\hat J_{c,k-1})
+$$
+
+$$
+\lambda_{k+1}=\mathrm{clip}\big(K_Pe_k+K_II_{k+1}+K_DD_k,\ 0,\ 100\big)
+$$
+
+with `K_P=0.1`, `K_I=0.01`, `K_D=0.01`. The budget bounds the *expected* cost; it is not a per-episode or zero-event guarantee, and joint clipping and collision
 rejection stay active regardless. Raw unsafe counts, the multiplier trace and the budget-violation frequency are logged. Needs `--cost-budget-id`.
 
 Registered settings: `configs/models/sac_pidlag.yaml`.
@@ -557,7 +642,6 @@ python -m natural_rl export --run-id sac_pidlag-r7-s00 --kind trajectories --sui
 python -m natural_rl results locate --run-id sac_pidlag-r7-s00
 ```
 
-
 ---
 
 ## 4. Reward profiles and cost budgets
@@ -566,17 +650,17 @@ $$
 r=r_0+\sum_i\lambda_i f_i
 $$
 
-Raw terms $f_i$, weights $\lambda_i$, weighted contributions and totals are logged at every decision. $d_t$ is the distance (m) from the accepted end effector to the goal.
+Raw terms `f_i`, weights `λ_i`, weighted contributions and totals are logged at every decision. `d_t` is the distance (m) from the accepted end effector to the goal.
 
 | Term | Definition |
 | --- | --- |
-| $r_0$ | $-\min(d/0.5,1)+\exp\!\big(-d^2/(2\cdot0.02^2)\big)-c-0.01\,\overline{(v/v_{\max})^2}$ (the historical reward, exactly) |
-| hold | $0.2\cdot\mathbb 1[d\le0.02]+0.8\cdot\mathbb 1[c_t\ge5]$ (fixed, not calibrated) |
-| time | $-\Delta t/5\,\mathrm s$ per decision before the first 5-step hold |
-| path | $-\lVert p_{t+1}-p_t\rVert/0.5\,\mathrm m$ (executed end-effector motion) |
-| speed | $-(\Delta t/5\,\mathrm s)\,\overline{(v/v_{\max})^2}$ (command-effort proxy, not energy) |
-| accel | $-\overline{\big((v_t-v_{t-1})/(\Delta t\cdot40\,\mathrm{rad/s^2})\big)^2}$ (needs the previous command) |
-| rom | $-\overline{\max\!\big(0,(0.1-m_j)/0.1\big)^2}$, $m_j$ = normalised distance to the nearest limit (range exposure, not stress) |
+| `r_0` | `-min(d/0.5,1)+exp(-d²/(2·0.02²))-c-0.01 mean((v/v_max)²)` (the historical reward, exactly) |
+| hold | `0.2·1[d ≤ 0.02]+0.8·1[c_t ≥ 5]` (fixed, not calibrated) |
+| time | `-Δt/5 s` per decision before the first 5-step hold |
+| path | `-‖p_(t+1)-p_t‖/0.5 m` (executed end-effector motion) |
+| speed | `-(Δt/5 s) mean((v/v_max)²)` (command-effort proxy, not energy) |
+| accel | `-mean(((v_t-v_(t-1))/(Δt·40 rad/s²))²)` (needs the previous command) |
+| rom | `-mean(max(0,(0.1-m_j)/0.1)²)`, `m_j` = normalised distance to the nearest limit (range exposure, not stress) |
 
 Overlines are means over the seven joints. The twelve profiles (`configs/rewards/reward_v1.yaml`):
 
@@ -594,10 +678,10 @@ Additions and drop-ones are separate estimands and are never merged into one ran
 `train_v1` tasks only and sets
 
 $$
-\lambda_i=\min\!\Big(10,\ \frac{0.10\cdot\mathrm{median}\lvert R_0\rvert}{\max\!\big(10^{-4},\,P_{75}\lvert F_i\rvert\big)}\Big),
+\lambda_i=\min\!\Big(10,\ \frac{0.10\cdot\mathrm{median}\lvert R_0\rvert}{\max\!\big(10^{-4},\,P_{75}\lvert F_i\rvert\big)}\Big)
 $$
 
-with $R_0$ the episodic r0 return and $F_i$ the episodic unweighted sum of term $i$. The values, the data SHA256 and the code hash are written into the
+with `R_0` the episodic r0 return and `F_i` the episodic unweighted sum of term `i`. The values, the data SHA256 and the code hash are written into the
 register, which is then locked and immutable (a rule change means a new benchmark id). Profiles that contain a calibrated term refuse to train until
 the register is locked. `--dry-run` prints the table without writing.
 
@@ -608,14 +692,14 @@ attempts, so a joint that is already at its limit and is commanded further count
 
 ## 5. Metrics, HKS and statistics
 
-All metrics use **executed, accepted end-effector positions** $p_k$ at 20 samples/s (sample $k$ is the state after $k$ decisions, $k=0$ the initial state), never
+All metrics use **executed, accepted end-effector positions** `p_k` at 20 samples/s (sample `k` is the state after `k` decisions, `k=0` the initial state), never
 commands, and success is computed independently of the training reward.
 
-**Outcomes.** With $d_k=\lVert p_k-g\rVert$ and tolerance 2 cm: *first entry* is the first $k\ge1$ with $d_k\le0.02$; *any hold* is any 5 consecutive accepted positions
+**Outcomes.** With `d_k=‖p_k-g‖` and tolerance 2 cm: *first entry* is the first `k ≥ 1` with `d_k ≤ 0.02`; *any hold* is any 5 consecutive accepted positions
 inside; the *terminal hold* (the primary success variable) is
 
 $$
-\text{terminal hold}=\mathbb 1\big[\,d_k\le0.02\ \ \text{for the last 5 samples}\,\big].
+\text{terminal hold}=\mathbb 1\big[\,d_k\le0.02\ \ \text{for the last 5 samples}\,\big]
 $$
 
 Also stored: final error, executed path length, duration, goal departures after first entry, unsafe proposals per episode.
@@ -625,50 +709,78 @@ peak speed, capped before the terminal 5-sample window. The steady hold therefor
 segment, and dithering inside the tolerance sphere is scored. Velocity and jerk come from a consistent Savitzky-Golay filter (window 7, order 3) applied to the
 whole episode before slicing; raw finite differences are kept as a sensitivity.
 
-**Descriptors.** With $T$ the segment duration, $L=\sum\lVert p_{k+1}-p_k\rVert$ its path length and $v(t)$ the speed:
+**Descriptors.** With `T` the segment duration, `L=Σ‖p_(k+1)-p_k‖` its path length and `v(t)` the speed:
 
 $$
-\eta=\frac{\lVert g-p_0\rVert}{L_{0\to\text{offset}}},\qquad
-\mathrm{DJ}=\frac{T^{5}}{L^{2}}\int_0^{T}\big\Vert p^{(3)}(t)\big\Vert^{2}dt\ \ (\text{reported as }\log(1+\mathrm{DJ})),
+\eta=\frac{\lVert g-p_0\rVert}{L_{0\to\text{offset}}}
 $$
 
 $$
-\mathrm{SPARC}=-\int_{0}^{f_c}\sqrt{\Big(\frac1{f_c}\Big)^{2}+\Big(\frac{d\hat V(f)}{df}\Big)^{2}}\,df,\qquad \hat V(f)=\frac{V(f)}{V(0)},
+\mathrm{DJ}=\frac{T^{5}}{L^{2}}\int_0^{T}\big\Vert p^{(3)}(t)\big\Vert^{2}dt\ \ (\text{reported as }\log(1+\mathrm{DJ}))
 $$
 
-where $V$ is the Fourier magnitude of the speed profile (zero-padded) and the cutoff is fixed at $f_c\le8$ Hz (the code refuses cutoffs at or above the 10 Hz Nyquist
-frequency). Less negative SPARC is smoother. The timing descriptors compare the unit-mean speed $\hat v(s)=v/\bar v$ on normalised time $s\in[0,1]$ with the
+$$
+\mathrm{SPARC}=-\int_{0}^{f_c}\sqrt{\Big(\frac1{f_c}\Big)^{2}+\Big(\frac{d\hat V(f)}{df}\Big)^{2}}\,df
+$$
+
+$$
+\hat V(f)=\frac{V(f)}{V(0)}
+$$
+
+where `V` is the Fourier magnitude of the speed profile (zero-padded) and the cutoff is fixed at `f_c ≤ 8` Hz (the code refuses cutoffs at or above the 10 Hz Nyquist
+frequency). Less negative SPARC is smoother. The timing descriptors compare the unit-mean speed `v̂(s)=v/v̄` on normalised time `s ∈ [0,1]` with the
 analytic minimum-jerk profile (a metric reference only, never a controller):
 
 $$
-x(\tau)=10\tau^{3}-15\tau^{4}+6\tau^{5},\qquad v_{\mathrm{mj}}(s)=30\,s^{2}(1-s)^{2},\qquad
-\mathrm{RMSE}=\sqrt{\tfrac1n\sum_i\big(\hat v(s_i)-v_{\mathrm{mj}}(s_i)\big)^2}.
+x(\tau)=10\tau^{3}-15\tau^{4}+6\tau^{5}
+$$
+
+$$
+v_{\mathrm{mj}}(s)=30\,s^{2}(1-s)^{2}
+$$
+
+$$
+\mathrm{RMSE}=\sqrt{\tfrac1n\sum_i\big(\hat v(s_i)-v_{\mathrm{mj}}(s_i)\big)^2}
 $$
 
 Further descriptors: number of speed peaks (10 % prominence), pause fraction (share of segment samples below 1 % of peak speed), joint-reversal rate (executed joint
-velocity sign changes per second, motion below $10^{-4}$ rad ignored). Short, zero-displacement, non-finite or non-held episodes receive explicit quality flags and never
-an artificially perfect score. Because the window drops the first and last ~6 % of a movement, an ideal minimum-jerk reach has $\mathrm{RMSE}\approx0.14$ and
-$\mathrm{DJ}\approx200$ through this exact pipeline (the textbook 720 is for the full movement); these are constant floors for every policy.
+velocity sign changes per second, motion below `10⁻⁴` rad ignored). Short, zero-displacement, non-finite or non-held episodes receive explicit quality flags and never
+an artificially perfect score. Because the window drops the first and last ~6 % of a movement, an ideal minimum-jerk reach has `RMSE ≈ 0.14` and
+`DJ ≈ 200` through this exact pipeline (the textbook 720 is for the full movement); these are constant floors for every policy.
 
-**HKS (0-100).** Each descriptor is scaled to $[0,1]$ with frozen anchors $(q_{lo},q_{hi})$,
+**HKS (0-100).** Each descriptor is scaled to `[0,1]` with frozen anchors `(q_lo,q_hi)`,
 
 $$
-b_\uparrow(x)=\mathrm{clip}\!\Big(\frac{x-q_{lo}}{q_{hi}-q_{lo}},0,1\Big),\qquad b_\downarrow(x)=1-b_\uparrow(x),
+b_\uparrow(x)=\mathrm{clip}\!\Big(\frac{x-q_{lo}}{q_{hi}-q_{lo}},0,1\Big)
+$$
+
+$$
+b_\downarrow(x)=1-b_\uparrow(x)
 $$
 
 and four equally weighted domains are averaged:
 
 $$
-\begin{aligned}
-D_1&=\tfrac12\,b_\uparrow(\mathrm{SPARC})+\tfrac12\,b_\downarrow\big(\log(1+\mathrm{DJ})\big) &&\text{smoothness}\\
-D_2&=\tfrac12\,b_\downarrow(\mathrm{RMSE})+\tfrac12\,b_\downarrow\big(\max(\text{peaks}-1,0)\big) &&\text{timing}\\
-D_3&=b_\uparrow(\eta) &&\text{spatial (direct-reach tasks only)}\\
-D_4&=\tfrac12\,b_\downarrow(\text{pause fraction})+\tfrac12\,b_\downarrow(\text{reversal rate}) &&\text{continuity}
-\end{aligned}
-\qquad \mathrm{HKS}=25\,(D_1+D_2+D_3+D_4).
+D_1=\tfrac12\,b_\uparrow(\mathrm{SPARC})+\tfrac12\,b_\downarrow\big(\log(1+\mathrm{DJ})\big) \quad \text{smoothness}
 $$
 
-The lower anchor $q_{lo}$ is the 5th percentile; the upper anchor $q_{hi}$ is the first of the 95th percentile, the 99th percentile and the maximum that exceeds $q_{lo}$ (several
+$$
+D_2=\tfrac12\,b_\downarrow(\mathrm{RMSE})+\tfrac12\,b_\downarrow\big(\max(\text{peaks}-1,0)\big) \quad \text{timing}
+$$
+
+$$
+D_3=b_\uparrow(\eta) \quad \text{spatial (direct-reach tasks only)}
+$$
+
+$$
+D_4=\tfrac12\,b_\downarrow(\text{pause fraction})+\tfrac12\,b_\downarrow(\text{reversal rate}) \quad \text{continuity}
+$$
+
+$$
+\mathrm{HKS}=25\,(D_1+D_2+D_3+D_4)
+$$
+
+The lower anchor `q_lo` is the 5th percentile; the upper anchor `q_hi` is the first of the 95th percentile, the 99th percentile and the maximum that exceeds `q_lo` (several
 descriptors are exactly 0 for clean reaches). The rung used is recorded per metric, and a metric that never varies is a blocking error and is never silently replaced by zero.
 Anchors are fitted per simulator backend on successful, quality-valid **validation** episodes only (`calibrate scalers --runs RUN1,RUN2`, at least 200 episodes) and locked
 before held-out evaluation.
@@ -676,15 +788,18 @@ before held-out evaluation.
 **Reliability-adjusted score.** Failures and unscorable successes contribute zero and stay in the denominator:
 
 $$
-R\text{-}\mathrm{HKS}=\frac1{N_{\text{tasks}}}\sum_{i}\ \text{terminal hold}_i\cdot\mathrm{HKS}_i .
+R\text{-}\mathrm{HKS}=\frac1{N_{\text{tasks}}}\sum_{i}\ \text{terminal hold}_i\cdot\mathrm{HKS}_i
 $$
 
 **Statistics.** Frames are never replicates; the resampling units are held-out task IDs and training seeds (crossed bootstrap, 2,000 resamples, seed 20261121, 95 % percentile
 intervals). Leaderboards share tasks across models and report rank probabilities. A reward effect is a within-policy paired difference on matched (seed, task) cells,
 
 $$
-\Delta=\overline{\text{R-HKS}_{\text{treatment}}-\text{R-HKS}_{\text{baseline}}},\qquad
-q_{(i)}=\min_{j\ge i}\ \frac{m}{j}\,p_{(j)}\quad\text{(Benjamini-Hochberg over the registered family of }m\text{ contrasts)},
+\Delta=\overline{\text{R-HKS}_{\text{treatment}}-\text{R-HKS}_{\text{baseline}}}
+$$
+
+$$
+q_{(i)}=\min_{j\ge i}\ \frac{m}{j}\,p_{(j)}\quad\text{(Benjamini-Hochberg over the registered family of }m\text{ contrasts)}
 $$
 
 and missing cells (crashes, timeouts) are counted and never imputed. A high point estimate is not called a winner unless the intervals and rank probabilities resolve it.
@@ -742,7 +857,7 @@ stops with an explicit disk alert if free space is below its estimate and never 
 `touch <run_dir>/MANUAL_CHECKPOINT`. `--checkpoint-step N` always means exactly that saved step, never "the latest".
 
 **Every checkpoint gets a raw video** (`--record-every-checkpoint`). The checkpoint is reloaded from disk into a separate evaluation environment, the validation task `val_001` is replayed
-deterministically (seed 20261121), and the accepted robot state is rendered at $t=0$ and after every 0.05 s decision (101 frames for 100 decisions) into `raw.mkv`: lossless FFV1, 640x480,
+deterministically (seed 20261121), and the accepted robot state is rendered at `t=0` and after every 0.05 s decision (101 frames for 100 decisions) into `raw.mkv`: lossless FFV1, 640x480,
 fixed camera `canonical_v1`, no overlays or goal marker, rejected and still frames kept. Frames are encoded as `bgr0` (this FFmpeg's FFV1 has no 8-bit planar RGB), a reversible channel reorder.
 `preview.mp4` is a lossy viewing copy and never the record. `raw.mkv` plays in VLC or `ffplay` (FFV1 support varies by player; use `preview.mp4` if yours cannot).
 
@@ -803,15 +918,23 @@ collision, rejected collision, clip proposal, raw and weighted reward terms, cos
 ## 11. The original experiment
 
 `kangaroo_rl` trains the goal-conditioned DecQN of section 3 on a fast model of the arm and evaluates it in the simulator. The model is the same compiled MuJoCo model as the simulator
-(forward kinematics agrees to $10^{-9}$ m and the collision test agrees with full contact detection), but a model step costs a fraction of a simulator decision, so millions of transitions are
+(forward kinematics agrees to `10⁻⁹` m and the collision test agrees with full contact detection), but a model step costs a fraction of a simulator decision, so millions of transitions are
 cheap. Goals are collision-free reach points over the table (a pool of 8,508 points thinned to one per 2 cm voxel); starts are 50 % where the previous episode ended (a retargeting
 situation), 25 % home with noise, 25 % a random collision-free pose.
 
 **Executing a decision in the simulator.** Kangaroo_Libero accepts only absolute joint-position targets at 100 Hz, so one decision is five ticks of a linearly interpolated reference
-with a velocity feed-forward $\tau_j=k_d/k_p$ (none on the forearm roll, whose inertia is too small for it, nor on the two wrist joints, which are position actuators without a velocity term):
+with a velocity feed-forward `τ_j=k_d/k_p` (none on the forearm roll, whose inertia is too small for it, nor on the two wrist joints, which are position actuators without a velocity term):
 
 $$
-q_{\text{ref}}(m)=q_0+\tfrac m5\,(q_{\text{cmd}}-q_0),\quad m=1..5,\qquad q_{\text{target}}=\mathrm{clip}\big(q_{\text{ref}}(m)+\tau_j\,v\big).
+q_{\text{ref}}(m)=q_0+\tfrac m5\,(q_{\text{cmd}}-q_0)
+$$
+
+$$
+m=1..5
+$$
+
+$$
+q_{\text{target}}=\mathrm{clip}\big(q_{\text{ref}}(m)+\tau_j\,v\big)
 $$
 
 Two observation modes exist: A (the policy sees the commanded positions) and B (the measured positions). Error is always measured on the simulated hand.
