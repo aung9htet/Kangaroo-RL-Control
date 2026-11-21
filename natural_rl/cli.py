@@ -69,9 +69,10 @@ def cmd_catalog(args) -> int:
             runs = programme.phase_runs(ph, policies if ph == 'P3' else None)
             t = programme.totals(runs)
             print(f'# {ph}: {t["runs"]} runs, {t["transitions"] / 1e6:.0f}M transitions, {t["videos"]} checkpoint videos')
-            if args.commands:
+            if args.commands or args.with_eval:
                 for r in runs:
-                    print(programme.train_command(r))
+                    for line in programme.run_lines(r, with_eval=args.with_eval):
+                        print(line)
         if not args.phase:
             tot = programme.programme_totals()['TOTAL']
             print(f'# TOTAL: {tot["runs"]} runs, {tot["transitions"] / 1e6:.0f}M transitions, {tot["videos"]} checkpoint videos')
@@ -509,6 +510,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument('--phase')
     c.add_argument('--policies', help='P3 only: decqn,A,B,C')
     c.add_argument('--commands', action='store_true', help='print every registered train command')
+    c.add_argument('--with-eval', action='store_true', help='also print the verify and evaluation lines of every run, in order')
     c.add_argument('--select', action='store_true', help='P3: choose the three controllers from the P2 validation evaluations')
     c.set_defaults(fn=cmd_catalog)
 

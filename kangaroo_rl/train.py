@@ -67,8 +67,8 @@ def new_starts(env, starts, rng, mix, first=False):
     return q
 
 
-def train(config: dict, seed: int, out: Path, device='auto', threads=None, on_checkpoint=None, checkpoint_steps=None):
-    """`on_checkpoint(step, agent)` and `checkpoint_steps` are optional hooks (used by natural_rl for the P0 parity runs);
+def train(config: dict, seed: int, out: Path, device='auto', threads=None, on_checkpoint=None, checkpoint_steps=None, on_step=None):
+    """`on_checkpoint(step, agent)`, `on_step(step)` and `checkpoint_steps` are optional hooks (used by natural_rl for the P0 parity runs);
     with both left at None this is exactly the original training loop."""
     out.mkdir(parents=True, exist_ok=True)
     (out / 'checkpoints').mkdir(exist_ok=True)
@@ -139,6 +139,8 @@ def train(config: dict, seed: int, out: Path, device='auto', threads=None, on_ch
         replay.add(env.t - 1, q, actions, result.q_next, result.collided, result.point_next, result.point)
         q = result.q_next
         step += n_envs
+        if on_step is not None:
+            on_step(step)
         if done:
             replay.end()
             q, goal = env.reset_to(new_starts(env, starts, rng, config['starts']), exp.pool.sample(rng, n_envs))

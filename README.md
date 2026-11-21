@@ -59,6 +59,7 @@ python -m natural_rl catalog models
 python -m natural_rl catalog rewards
 python -m natural_rl catalog suites
 python -m natural_rl catalog programme --phase P2 --commands   # every registered train command of a phase
+python -m natural_rl catalog programme --phase P2 --with-eval     # the same, with the verify and evaluation lines of each run, in order
 ```
 
 `results/` and `data/` are bind-mounted from the host and survive the container. Copy `.env.example` to `.env` to change the host paths
@@ -884,6 +885,16 @@ fixed camera `canonical_v1`, no overlays or goal marker, rejected and still fram
 * `video record` on a step that already has a verified video never overwrites it: it re-renders in memory and reports whether the pixels are identical.
 * `video backfill` regenerates only missing or failed videos.
 * `play` runs one exact saved checkpoint headless and writes a synchronised trace.
+
+**Progress display.** `train` shows which model and run is executing and how far it is, redrawn on one line in a terminal:
+
+```
+sac | sac-r7-s00 | r7_balanced seed 0 | ██████░░░░░░░░░░░░░░░░░░  26.5% 265,000/1,000,000 | ckpt 5/21 | 1,230 tr/s | 0:03:35 elapsed, ETA 0:10:12
+```
+
+It also announces each checkpoint and video above the bar (`recording video of step ...` appears while one is captured). Speed is measured on training
+time only, and the ETA adds the expected time of the videos still to come. When output is a file or pipe (`docker compose run -T`, `| tee`) it prints one
+plain `[progress]` line about every 5 %.
 
 **Determinism.** `PYTHONHASHSEED=0`, numpy and torch seeded from `--seed`, CPU threads from `--threads` (default 4). Replay of a checkpoint is deterministic for every controller
 (TD-MPC2: for a fixed device and seed). Smoke runs (`--smoke`) go to `results/smoke/` and skip the clean-tree check. Registered runs refuse to start on a dirty git tree.

@@ -54,6 +54,7 @@ def train(ctx, args, overrides) -> list:
 
     differences = [d for d in parity_differences(config, reference) if d not in ('train.steps',)]
     historical_train(config, ctx.seed, ctx.run_dir / 'native', 'cpu' if ctx.device == 'auto' else ctx.device, ctx.threads,
-                     on_checkpoint=on_checkpoint, checkpoint_steps=steps)
+                     on_checkpoint=on_checkpoint, checkpoint_steps=steps,
+                     on_step=lambda step: ctx.progress.update(step) if ctx.progress is not None else None)
     ctx.clock.on_end(ctx.total_steps, lambda directory: None)
     return differences

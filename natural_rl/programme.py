@@ -82,3 +82,24 @@ def programme_totals(p3_policies=('decqn', 'ppo_md', 'sac', 'td3')) -> dict:
     per = {p: totals(phase_runs(p, p3_policies if p == 'P3' else None)) for p in ('P0', 'P1', 'P2', 'P3', 'P4')}
     per['TOTAL'] = {k: sum(v[k] for v in per.values()) for k in ('runs', 'transitions', 'videos')}
     return per
+
+
+def run_lines(run: dict, with_eval: bool = True) -> list:
+    """The ordered lines to run for one registered run: train (which also records every checkpoint video), then verify and evaluate.
+
+    P0 only trains and verifies (its rollouts calibrate the reward coefficients). P1 adds the final-checkpoint validation evaluation
+    that the HKS scalers are fitted from. P2-P4 add validation on every checkpoint, the test evaluation of the validation-selected
+    checkpoint and the summary.
+    """
+    rid = run['run_id']
+    lines = [train_command(run)]
+    if not with_eval:
+        return lines
+    lines.append(f'python -m natural_rl video verify --run-id {rid} --all-checkpoints')
+    if run['phase'] == 'P1':
+        lines.append(f'python -m natural_rl eval --run-id {rid} --suite val_v1 --final')
+    elif run['phase'] in ('P2', 'P3', 'P4'):
+        lines += [f'python -m natural_rl eval --run-id {rid} --suite val_v1 --all-checkpoints',
+                  f'python -m natural_rl eval --run-id {rid} --suite test_v1 --manifest configs/eval/test_v1.json',
+                  f'python -m natural_rl analyse --run-id {rid}']
+    return lines

@@ -22,6 +22,7 @@ from .env.contract import ObsSpec
 from .env.reach_env import ReachBench
 from .env.tasks import load_manifest, task_arrays
 from .models.registry import ModelNotImplemented, train_model
+from .progress import Progress
 from .provenance import disk_free_bytes, run_provenance
 from .registry import (budgets_config, file_sha, load_yaml, model_config, repo_root, results_root, reward_config,
                        run_dir, suite_path)
@@ -52,16 +53,22 @@ class Clock:
                                    meta={'run_id': ctx.run_id, 'model': ctx.model, 'reward': ctx.reward, 'seed': ctx.seed,
                                          'transitions': int(step), 'wall_s': round(time.time() - ctx.start_time, 1)})
         self.saved.add(step)
-        print(f'[checkpoint] step {step:>9d}  {kind:9s} sha256 {manifest["sha256"][:12]}', flush=True)
+        ctx.say(f'[checkpoint] step {step:>9d}  {kind:9s} sha256 {manifest["sha256"][:12]}')
+        if ctx.progress is not None:
+            ctx.progress.checkpoint_saved()
         if ctx.recorder is not None and ctx.record_every_checkpoint:
+            if ctx.progress is not None:
+                ctx.progress.phase(f'recording video of step {step:,}')
             row = ctx.recorder.record(step)
+            if ctx.progress is not None:
+                ctx.progress.phase('')
             if row['status'] != 'ok':
                 self.failures.append((step, row['error']))
-                print(f'[ERROR] checkpoint {step}: video capture FAILED: {row["error"]}', flush=True)
+                ctx.say(f'[ERROR] checkpoint {step}: video capture FAILED: {row["error"]}')
                 if ctx.strict_video:
                     raise RuntimeError(f'video capture failed at step {step}: {row["error"]}')
             else:
-                print(f'[video]      step {step:>9d}  {row["frame_count"]} frames  raw.mkv sha256 {str(row["video_sha256"])[:12]}', flush=True)
+                ctx.say(f'[video]      step {step:>9d}  {row["frame_count"]} frames  raw.mkv sha256 {str(row["video_sha256"])[:12]}')
         ctx.flush_logs()
 
     def on_start(self, step, save_fn):
@@ -70,6 +77,8 @@ class Clock:
             self._save(step, 'initial', save_fn)
 
     def after_step(self, step, save_fn):
+        if self.ctx.progress is not None:
+            self.ctx.progress.update(step)
         while self.pending and step >= self.pending[0]:
             due = self.pending.pop(0)
             if step != due:
@@ -106,11 +115,18 @@ class TrainContext:
     threads: int = 4
     device: str = 'auto'
     recorder: object = None
+    progress: object = None
     cost_budget: object = None
     start_time: float = field(default_factory=time.time)
     clock: Clock = None
     _updates: list = field(default_factory=list)
     _episodes: list = field(default_factory=list)
+
+    def say(self, text: str) -> None:
+        if self.progress is not None:
+            self.progress.log(text)
+        else:
+            print(text, flush=True)
 
     def make_env(self, n: int, seed: int | None = None) -> ReachBench:
         return ReachBench(self.scene, n, self.profile, self.spec, self.tasks, horizon=self.horizon,
@@ -225,6 +241,9 @@ def run_training(args) -> int:
         if args.cost_budget_id is None:
             raise ValueError('sac_pidlag needs --cost-budget-id (budget_moderate_v1 or budget_strict_v1)')
         ctx.cost_budget = PIDLagrangian.from_yaml(budgets_config(), args.cost_budget_id)
+    ctx.progress = Progress(args.model, args.run_id, args.reward, args.seed, args.steps, len(steps))
+    ctx.progress.log(f'[start] {args.model} | {args.run_id} | reward {args.reward} | seed {args.seed} | {args.steps:,} transitions | '
+                     f'{len(steps)} checkpoints{" with raw videos" if args.record_every_checkpoint else ""}')
     ctx.clock = Clock(ctx)
     status, error = 'complete', None
     try:
@@ -251,7 +270,8 @@ def run_training(args) -> int:
         write_json(out / 'manifest.json', manifest)
         if ctx.recorder is not None:
             ctx.recorder.close()
-    print(f'[run] {args.run_id}: {status}; {len(read_index(out))} checkpoints; results at {out}', flush=True)
+    ctx.progress.finish(status)
+    print(f'[run] results at {out}', flush=True)
     for problem in manifest['video_problems']:
         print(f'[ERROR] {problem}', flush=True)
     return 0 if status == 'complete' else 1
