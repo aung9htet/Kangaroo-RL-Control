@@ -79,11 +79,11 @@ The goal is part of the state so a single policy serves every goal. Two observat
 | `obs_v2` (every benchmark run) | $\phi(\tilde q)\,\Vert\,\phi(\tilde g)\,\Vert\,v_{t-1}/v_{\max}\,\Vert\,\min(c_t,5)/5\,\Vert\,h_t$ | $90+7+1+1=99$ |
 
 In `obs_v2`, $v_{t-1}$ is the previous command, $c_t$ the number of consecutive accepted positions within 2 cm of the goal (the *dwell counter*)
-and $h_t\in\{0,1\}$ whether a 5-step hold has already been completed. They make the hold-aware rewards Markov.
+and $h_t\in\lbrace0,1\rbrace$ whether a 5-step hold has already been completed. They make the hold-aware rewards Markov.
 
 **Action.** Seven joint-velocity commands bounded by $v_{\max}=1$ rad/s, applied for one decision of $\Delta t=0.05$ s (20 Hz):
 
-* *Discrete controllers* choose one bin per joint: $v_j=v_{\max}\,b_{k_j}$ with $b=(-1,-0.3,-0.1,0,0.1,0.3,1)$ and $k_j\in\{0,\dots,6\}$,
+* *Discrete controllers* choose one bin per joint: $v_j=v_{\max}\,b_{k_j}$ with $b=(-1,-0.3,-0.1,0,0.1,0.3,1)$ and $k_j\in\lbrace0,\dots,6\rbrace$,
   i.e. $7^7=823{,}543$ joint actions.
 * *Continuous controllers* output $a\in[-1,1]^7$ with $v=v_{\max}\mathrm{clip}(a,-1,1)$.
 
@@ -109,7 +109,7 @@ $$
 hand passed through. With probability 0.8 a sampled transition gets the goal replaced by a position reached later in the same episode:
 
 $$
-\tilde g=p(q_{t'}),\quad t'\sim\mathcal U\{t,\dots,H-1\},\qquad \tilde r_i=r(\,\cdot\,;\tilde g\,)\ \text{recomputed}.
+\tilde g=p(q_{t'}),\quad t'\sim\mathcal U\lbrace t,\dots,H-1\rbrace,\qquad \tilde r_i=r(\,\cdot\,;\tilde g\,)\ \text{recomputed}.
 $$
 
 This is valid because the transition $(q',c)$ does not depend on the goal; only the reward does, so rewards are never stored. Because the
@@ -197,7 +197,7 @@ python -m natural_rl results locate --run-id decqn-r7-s00
 
 **What it does.** DecQN that starts with a very coarse action set and refines it during training. Coarse control (bang-bang) explores quickly and
 is easy to learn; fine control is needed later for precision. The network always has all seven bins, but only an *active subset*
-$\mathcal A_g\subseteq\{0,\dots,6\}$ may be chosen: masking is applied to the greedy action, to the epsilon-greedy exploration and to the maximum
+$\mathcal A_g\subseteq\lbrace0,\dots,6\rbrace$ may be chosen: masking is applied to the greedy action, to the epsilon-greedy exploration and to the maximum
 in the Double-Q target:
 
 $$
@@ -209,9 +209,9 @@ $$
 
 | Stage | Active velocities (rad/s) | Bins |
 | --- | --- | --- |
-| 0 | $\{-1,+1\}$ | 2 |
-| 1 | $\{-1,0,+1\}$ | 3 |
-| 2 | $\{-1,-0.3,0,0.3,1\}$ | 5 |
+| 0 | $\lbrace-1,+1\rbrace$ | 2 |
+| 1 | $\lbrace-1,0,+1\rbrace$ | 3 |
+| 2 | $\lbrace-1,-0.3,0,0.3,1\rbrace$ | 5 |
 | 3 | all seven | 7 |
 
 The active set is saved inside every checkpoint (a replay acts at the resolution the checkpoint had) and the active resolution is logged at
@@ -390,7 +390,7 @@ python -m natural_rl results locate --run-id td3-r7-s00
 the largest atoms are discarded before forming the target: all $5\times25$ next-state atoms are pooled and sorted, and the top $5\times2=10$ are dropped.
 
 $$
-\mathcal Z=\mathrm{sort}\big\{z^{n,m}_{\bar\phi}(s',a')\big\}_{n\le5,\,m\le25},\qquad
+\mathcal Z=\mathrm{sort}\big\lbrace z^{n,m}_{\bar\phi}(s',a')\big\rbrace_{n\le5,\,m\le25},\qquad
 y_i=\tilde r+\gamma\big(z_{(i)}-\alpha\log\pi(a'\mid s')\big),\ \ i=1,\dots,115,
 $$
 
@@ -470,7 +470,7 @@ reading it from a policy network. Components (smallest official preset, 1M param
 rewards recomputed over the window). With $z_0=h_\theta(s_0)$, $z_{t+1}=d_\theta(z_t,a_t)$ and $\rho=0.5$:
 
 $$
-\mathcal L=\sum_{t=0}^{H_p-1}\rho^{t}\Big(c_{1}\,\big\lVert z_{t+1}-\mathrm{sg}\,h_\theta(s_{t+1})\big\rVert_2^2
+\mathcal L=\sum_{t=0}^{H_p-1}\rho^{t}\Big(c_{1}\,\big\Vert z_{t+1}-\mathrm{sg}\,h_\theta(s_{t+1})\big\Vert_2^2
 +c_{2}\mathrm{CE}\!\big(\hat r_t,r_t\big)+c_{3}\mathrm{CE}\!\big(\hat q_t,\mathrm{sg}\,y_t\big)\Big),
 $$
 
@@ -629,7 +629,7 @@ whole episode before slicing; raw finite differences are kept as a sensitivity.
 
 $$
 \eta=\frac{\lVert g-p_0\rVert}{L_{0\to\text{offset}}},\qquad
-\mathrm{DJ}=\frac{T^{5}}{L^{2}}\int_0^{T}\big\lVert p^{(3)}(t)\big\rVert^{2}dt\ \ (\text{reported as }\log(1+\mathrm{DJ})),
+\mathrm{DJ}=\frac{T^{5}}{L^{2}}\int_0^{T}\big\Vert p^{(3)}(t)\big\Vert^{2}dt\ \ (\text{reported as }\log(1+\mathrm{DJ})),
 $$
 
 $$
