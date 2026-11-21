@@ -85,13 +85,13 @@ and $h_t\in\{0,1\}$ whether a 5-step hold has already been completed. They make 
 
 * *Discrete controllers* choose one bin per joint: $v_j=v_{\max}\,b_{k_j}$ with $b=(-1,-0.3,-0.1,0,0.1,0.3,1)$ and $k_j\in\{0,\dots,6\}$,
   i.e. $7^7=823{,}543$ joint actions.
-* *Continuous controllers* output $a\in[-1,1]^7$ with $v=v_{\max}\operatorname{clip}(a,-1,1)$.
+* *Continuous controllers* output $a\in[-1,1]^7$ with $v=v_{\max}\mathrm{clip}(a,-1,1)$.
 
 **Transition.** The commanded velocity is integrated for one decision and clipped to the joint limits; if the arm at the clipped pose
 penetrates the table or the robot, the whole move is rejected:
 
 $$
-\hat q=\operatorname{clip}\!\big(q+\Delta t\,v,\ q^{\min},q^{\max}\big),\qquad
+\hat q=\mathrm{clip}\!\big(q+\Delta t\,v,\ q^{\min},q^{\max}\big),\qquad
 q'=\begin{cases}q & \text{if the arm at }\hat q\text{ collides (move rejected, collision flag }c=1)\\ \hat q & \text{otherwise.}\end{cases}
 $$
 
@@ -167,7 +167,7 @@ network ($\tau=0.005$), gradient clipping at 10, Adam $3\times10^{-4}$, batch 25
 
 $$
 y=\sum_{i=0}^{m-1}\gamma^{i}\tilde r_{t+i}+\gamma^{m}\,Q_{\theta^-}\!\big(s_{t+m},\hat a\big),\quad \hat a_j=\arg\max_k U_j(s_{t+m},k;\theta),
-\qquad \mathcal L(\theta)=\operatorname{Huber}\!\big(y-Q_\theta(s_t,a_t)\big).
+\qquad \mathcal L(\theta)=\mathrm{Huber}\!\big(y-Q_\theta(s_t,a_t)\big).
 $$
 
 **Exploration.** Per joint, $\varepsilon$ falls linearly from 1 to 0.02 over the first 15 % of training; an exploring joint repeats one random
@@ -241,11 +241,11 @@ python -m natural_rl results locate --run-id growing_q-r7-s00
 **What it does.** An on-policy actor-critic. It collects fresh rollouts with the current policy and improves it with a clipped surrogate objective that
 keeps each update close to the policy that gathered the data. No replay buffer, so no goal relabelling.
 
-**Policy.** Seven independent categorical distributions over the 7 bins (one per joint), $\pi_\theta(a\mid s)=\prod_{j}\operatorname{Cat}(a_j;\operatorname{softmax}\ell_j(s))$,
+**Policy.** Seven independent categorical distributions over the 7 bins (one per joint), $\pi_\theta(a\mid s)=\prod_{j}\mathrm{Cat}(a_j;\mathrm{softmax}\ell_j(s))$,
 and a separate value network $V_\psi(s)$; both are MLPs with two layers of 256.
 
 $$
-\mathcal L^{\text{CLIP}}=\mathbb E_t\Big[\min\big(\rho_t\hat A_t,\ \operatorname{clip}(\rho_t,1-\epsilon,1+\epsilon)\,\hat A_t\big)\Big],\qquad
+\mathcal L^{\text{CLIP}}=\mathbb E_t\Big[\min\big(\rho_t\hat A_t,\ \mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon)\,\hat A_t\big)\Big],\qquad
 \rho_t=\frac{\pi_\theta(a_t\mid s_t)}{\pi_{\theta_{\text{old}}}(a_t\mid s_t)},
 $$
 
@@ -282,7 +282,7 @@ python -m natural_rl results locate --run-id ppo_md-r7-s00
 The policy is a diagonal Gaussian over the seven normalised velocities,
 
 $$
-a\sim\mathcal N\big(\mu_\theta(s),\operatorname{diag}\sigma^2\big),\qquad v=v_{\max}\operatorname{clip}(a,-1,1),
+a\sim\mathcal N\big(\mu_\theta(s),\mathrm{diag}\sigma^2\big),\qquad v=v_{\max}\mathrm{clip}(a,-1,1),
 $$
 
 with a state-independent learned log-standard-deviation. Comparing it with `ppo_md` isolates the effect of the action representation inside the
@@ -355,8 +355,8 @@ python -m natural_rl results locate --run-id sac-r7-s00
 (take the minimum), target-policy smoothing, and delayed actor updates.
 
 $$
-y=\tilde r+\gamma\min_{i}Q_{\bar\phi_i}\!\big(s',\ \operatorname{clip}(\mu_{\bar\psi}(s')+\epsilon,-1,1)\big),\qquad
-\epsilon=\operatorname{clip}\!\big(\mathcal N(0,0.2^{2}),-0.5,0.5\big),
+y=\tilde r+\gamma\min_{i}Q_{\bar\phi_i}\!\big(s',\ \mathrm{clip}(\mu_{\bar\psi}(s')+\epsilon,-1,1)\big),\qquad
+\epsilon=\mathrm{clip}\!\big(\mathcal N(0,0.2^{2}),-0.5,0.5\big),
 $$
 
 $$
@@ -390,13 +390,13 @@ python -m natural_rl results locate --run-id td3-r7-s00
 the largest atoms are discarded before forming the target: all $5\times25$ next-state atoms are pooled and sorted, and the top $5\times2=10$ are dropped.
 
 $$
-\mathcal Z=\operatorname{sort}\big\{z^{n,m}_{\bar\phi}(s',a')\big\}_{n\le5,\,m\le25},\qquad
+\mathcal Z=\mathrm{sort}\big\{z^{n,m}_{\bar\phi}(s',a')\big\}_{n\le5,\,m\le25},\qquad
 y_i=\tilde r+\gamma\big(z_{(i)}-\alpha\log\pi(a'\mid s')\big),\ \ i=1,\dots,115,
 $$
 
 $$
 \mathcal L=\sum_{n,i,m}\rho^{H}_{\tau_m}\!\big(y_i-z^{n,m}_\phi(s,a)\big),\qquad
-\mathcal L_\pi=\mathbb E\Big[\alpha\log\pi(a\mid s)-\tfrac1{5\cdot25}\textstyle\sum_{n,m}z^{n,m}_\phi(s,a)\Big],
+\mathcal L_\pi=\mathbb E\Big[\alpha\log\pi(a\mid s)-\tfrac1{5\cdot25}\sum_{n,m}z^{n,m}_\phi(s,a)\Big],
 $$
 
 where $\rho^{H}_\tau$ is the quantile Huber loss and $\tau_m$ the quantile midpoints. Temperature, update ratio and relabelled replay as in SAC.
@@ -427,7 +427,7 @@ $(s,a)$ and $(s',a')$ in a *single joint forward pass*, so the normalisation sta
 
 $$
 \big[Q(s,a),\,Q(s',a')\big]=Q_\phi\big([\,(s,a);(s',a')\,]\big),\qquad
-y=\tilde r+\gamma\Big(\operatorname{sg}\big[\min_iQ_i(s',a')\big]-\alpha\log\pi(a'\mid s')\Big),
+y=\tilde r+\gamma\Big(\mathrm{sg}\big[\min_iQ_i(s',a')\big]-\alpha\log\pi(a'\mid s')\Big),
 $$
 
 and the critic loss is the squared error to $y$ with gradients only through $Q(s,a)$. The actor maximises the same entropy-regularised value. All
@@ -470,8 +470,8 @@ reading it from a policy network. Components (smallest official preset, 1M param
 rewards recomputed over the window). With $z_0=h_\theta(s_0)$, $z_{t+1}=d_\theta(z_t,a_t)$ and $\rho=0.5$:
 
 $$
-\mathcal L=\sum_{t=0}^{H_p-1}\rho^{t}\Big(c_{1}\,\big\lVert z_{t+1}-\operatorname{sg}\,h_\theta(s_{t+1})\big\rVert_2^2
-+c_{2}\operatorname{CE}\!\big(\hat r_t,r_t\big)+c_{3}\operatorname{CE}\!\big(\hat q_t,\operatorname{sg}\,y_t\big)\Big),
+\mathcal L=\sum_{t=0}^{H_p-1}\rho^{t}\Big(c_{1}\,\big\lVert z_{t+1}-\mathrm{sg}\,h_\theta(s_{t+1})\big\rVert_2^2
++c_{2}\mathrm{CE}\!\big(\hat r_t,r_t\big)+c_{3}\mathrm{CE}\!\big(\hat q_t,\mathrm{sg}\,y_t\big)\Big),
 $$
 
 $$
@@ -535,7 +535,7 @@ after every block of finished episodes:
 
 $$
 e_k=\hat J_{c,k}-d,\quad I_{k+1}=\max(0,I_k+e_k),\quad D_k=\max(0,\hat J_{c,k}-\hat J_{c,k-1}),\quad
-\lambda_{k+1}=\operatorname{clip}\big(K_Pe_k+K_II_{k+1}+K_DD_k,\ 0,\ 100\big),
+\lambda_{k+1}=\mathrm{clip}\big(K_Pe_k+K_II_{k+1}+K_DD_k,\ 0,\ 100\big),
 $$
 
 with $K_P=0.1$, $K_I=0.01$, $K_D=0.01$. The budget bounds the *expected* cost; it is not a per-episode or zero-event guarantee, and joint clipping and collision
@@ -594,7 +594,7 @@ Additions and drop-ones are separate estimands and are never merged into one ran
 `train_v1` tasks only and sets
 
 $$
-\lambda_i=\min\!\Big(10,\ \frac{0.10\cdot\operatorname{median}\lvert R_0\rvert}{\max\!\big(10^{-4},\,P_{75}\lvert F_i\rvert\big)}\Big),
+\lambda_i=\min\!\Big(10,\ \frac{0.10\cdot\mathrm{median}\lvert R_0\rvert}{\max\!\big(10^{-4},\,P_{75}\lvert F_i\rvert\big)}\Big),
 $$
 
 with $R_0$ the episodic r0 return and $F_i$ the episodic unweighted sum of term $i$. The values, the data SHA256 and the code hash are written into the
@@ -629,7 +629,7 @@ whole episode before slicing; raw finite differences are kept as a sensitivity.
 
 $$
 \eta=\frac{\lVert g-p_0\rVert}{L_{0\to\text{offset}}},\qquad
-\mathrm{DJ}=\frac{T^{5}}{L^{2}}\int_0^{T}\big\lVert \dddot p(t)\big\rVert^{2}dt\ \ (\text{reported as }\log(1+\mathrm{DJ})),
+\mathrm{DJ}=\frac{T^{5}}{L^{2}}\int_0^{T}\big\lVert p^{(3)}(t)\big\rVert^{2}dt\ \ (\text{reported as }\log(1+\mathrm{DJ})),
 $$
 
 $$
@@ -642,7 +642,7 @@ analytic minimum-jerk profile (a metric reference only, never a controller):
 
 $$
 x(\tau)=10\tau^{3}-15\tau^{4}+6\tau^{5},\qquad v_{\mathrm{mj}}(s)=30\,s^{2}(1-s)^{2},\qquad
-\mathrm{RMSE}=\sqrt{\tfrac1n\textstyle\sum_i\big(\hat v(s_i)-v_{\mathrm{mj}}(s_i)\big)^2}.
+\mathrm{RMSE}=\sqrt{\tfrac1n\sum_i\big(\hat v(s_i)-v_{\mathrm{mj}}(s_i)\big)^2}.
 $$
 
 Further descriptors: number of speed peaks (10 % prominence), pause fraction (share of segment samples below 1 % of peak speed), joint-reversal rate (executed joint
@@ -653,7 +653,7 @@ $\mathrm{DJ}\approx200$ through this exact pipeline (the textbook 720 is for the
 **HKS (0-100).** Each descriptor is scaled to $[0,1]$ with frozen anchors $(q_{lo},q_{hi})$,
 
 $$
-b_\uparrow(x)=\operatorname{clip}\!\Big(\frac{x-q_{lo}}{q_{hi}-q_{lo}},0,1\Big),\qquad b_\downarrow(x)=1-b_\uparrow(x),
+b_\uparrow(x)=\mathrm{clip}\!\Big(\frac{x-q_{lo}}{q_{hi}-q_{lo}},0,1\Big),\qquad b_\downarrow(x)=1-b_\uparrow(x),
 $$
 
 and four equally weighted domains are averaged:
@@ -811,7 +811,7 @@ situation), 25 % home with noise, 25 % a random collision-free pose.
 with a velocity feed-forward $\tau_j=k_d/k_p$ (none on the forearm roll, whose inertia is too small for it, nor on the two wrist joints, which are position actuators without a velocity term):
 
 $$
-q_{\text{ref}}(m)=q_0+\tfrac m5\,(q_{\text{cmd}}-q_0),\quad m=1..5,\qquad q_{\text{target}}=\operatorname{clip}\big(q_{\text{ref}}(m)+\tau_j\,v\big).
+q_{\text{ref}}(m)=q_0+\tfrac m5\,(q_{\text{cmd}}-q_0),\quad m=1..5,\qquad q_{\text{target}}=\mathrm{clip}\big(q_{\text{ref}}(m)+\tau_j\,v\big).
 $$
 
 Two observation modes exist: A (the policy sees the commanded positions) and B (the measured positions). Error is always measured on the simulated hand.
