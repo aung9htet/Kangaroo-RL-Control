@@ -1,0 +1,89 @@
+# Reward register v1: twelve fixed profiles, one implementation (natural_rl/rewards).
+#
+#   r = r0 + sum_i lambda_i * f_i          (raw f_i, lambda_i, weighted term and total are logged per decision)
+#
+# The coefficients lambda_i are NOT chosen by hand. They are produced by `python -m natural_rl calibrate
+# rewards` from the unweighted episodic sums of each term on pilot rollouts (training/validation tasks
+# only), using the locked formula below, and written back into `calibration` with the SHA256 of the pilot
+# data. `train` refuses every profile that contains a calibrated term while `status` is not `locked`.
+# `hold` is a fixed, uncalibrated term (0.2 / 0.8 as registered in the protocol).
+version: reward_v1
+status: locked                   # locked by `calibrate rewards`; immutable
+
+constants:
+  dt_s: 0.05
+  v_max_rad_s: 1.0
+  episode_horizon_s: 5.0           # time and speed terms are scaled by dt / episode_horizon_s
+  tolerance_m: 0.02                # in-tolerance radius, same as the success definition
+  hold_steps: 5                    # consecutive accepted in-tolerance positions that define a hold
+  l_ref_m: 0.5                     # path term normaliser (end-effector metres)
+  a_ref_rad_s2: 40.0               # acceleration term normaliser = 2 * v_max / dt
+  rom_margin: 0.10                 # normalised distance to the nearest joint limit below which the range term acts
+
+terms:
+  r0:
+    kind: historical
+    definition: "-min(d/0.5, 1) + exp(-d^2 / (2 * 0.02^2)) - collision_flag - 0.01 * mean_j((v_cmd_j / v_max)^2)"
+    calibrated: false
+  hold:
+    kind: fixed
+    definition: "0.2 * [d <= tolerance] + 0.8 * [consecutive in-tolerance count >= hold_steps]"
+    calibrated: false
+    weights: {inside: 0.2, dwell: 0.8}
+  time:
+    kind: shaping
+    definition: "-dt / episode_horizon_s for every decision before the first completed 5-step hold"
+    calibrated: true
+  path:
+    kind: shaping
+    definition: "-||p_next - p_now|| / l_ref (executed end-effector motion, metres)"
+    calibrated: true
+  speed:
+    kind: shaping
+    definition: "-(dt / episode_horizon_s) * mean_j((v_cmd_j / v_max)^2)   [dimensionless command-effort proxy, not energy]"
+    calibrated: true
+  accel:
+    kind: shaping
+    definition: "-mean_j(((v_cmd_j(t) - v_cmd_j(t-1)) / (dt * a_ref))^2), v_cmd(-1) = 0   [command smoothness proxy]"
+    calibrated: true
+  rom:
+    kind: shaping
+    definition: "-mean_j(max(0, (m - margin_j) / m)^2), margin_j = normalised distance of joint j to its nearest limit   [range exposure, not joint stress]"
+    calibrated: true
+
+profiles:
+  r0_original:   {terms: [r0],                                         question: "Does the historical baseline reproduce?"}
+  r1_hold:       {terms: [r0, hold],                                   question: "Does explicit dwell improve terminal holding?"}
+  r2_time:       {terms: [r0, hold, time],                             question: "Does shorter completion help kinematic quality?"}
+  r3_path:       {terms: [r0, hold, path],                             question: "Does directness improve?"}
+  r4_speed:      {terms: [r0, hold, speed],                            question: "Does less commanded effort help?"}
+  r5_smooth:     {terms: [r0, hold, accel],                            question: "Does reduced stop/start help?"}
+  r6_rom:        {terms: [r0, hold, rom],                              question: "Does range avoidance help?"}
+  r7_balanced:   {terms: [r0, hold, path, speed, accel, rom],          question: "How do combined terms behave?"}
+  r8_drop_path:  {terms: [r0, hold, speed, accel, rom],                question: "Is path shaping needed in the combination?"}
+  r9_drop_speed: {terms: [r0, hold, path, accel, rom],                 question: "Is extra speed effort needed?"}
+  r10_drop_smooth: {terms: [r0, hold, path, speed, rom],               question: "Is acceleration shaping needed?"}
+  r11_drop_rom:  {terms: [r0, hold, path, speed, accel],               question: "Is range avoidance needed?"}
+
+# Registered contrast families (never merged into one ranking).
+contrasts:
+  single_additions:      {baseline: r1_hold,     treatments: [r2_time, r3_path, r4_speed, r5_smooth, r6_rom]}
+  conditional_necessity: {baseline: r7_balanced, treatments: [r8_drop_path, r9_drop_speed, r10_drop_smooth, r11_drop_rom]}
+
+calibration:
+  formula: "lambda_i = min(10, 0.10 * median(|episode r0 return|) / max(1e-4, P75(|episode raw term i|)))"
+  cap: 10.0
+  scale_fraction: 0.10
+  floor: 1.0e-4
+  data:                            # filled in by `calibrate rewards`
+    source: "deterministic rollouts of runs ['decqn-r0hist-s00', 'decqn-r0hist-s01', 'decqn-r0hist-s02'] on train_v1 tasks (checkpoints: final)"
+    n_episodes: 1500
+    sha256: '748922060901fdab8c1e777ffa308655dc9c67b6eddaef2e3f1c86bb3ca7fd76'
+    code_sha: '7c8780a9ea0fd86669098579cf6ec484f1008552e99a0fb31e23bc9733c9b76f'
+    locked_at: '2026-11-21T12:15:36+0100'
+  lambda:                          # filled in by `calibrate rewards`
+    time: 1.993452912
+    path: 0.4862182607
+    speed: 5.606279721
+    accel: 0.2390896812
+    rom: 0.08355745102

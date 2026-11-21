@@ -1,0 +1,18 @@
+id: crossq
+name: CrossQ
+family: continuous off-policy
+action_space: "Box[-1,1]^7: v = v_max * clip(a, -1, 1)"
+paper: {authors: "Bhatt, A. et al.", title: "CrossQ: Batch Normalization in Deep Reinforcement Learning for Greater Sample Efficiency and Simplicity", venue: "ICLR 2024", url: "https://proceedings.iclr.cc/paper_files/paper/2024/hash/f381114cf5aba4e45552869863deaaa7-Abstract-Conference.html"}
+implementation: "sb3-contrib 2.7.1 CrossQ (library defaults for its batch-normalised critics, policy delay and learning rate) with the goal-relabelling replay"
+n_envs: 16
+off_policy: true
+goal_relabelling: {enabled: true, strategy: future, ratio: 0.8}
+hyper:
+  gamma: 0.95
+  batch: 256
+  learning_starts: 10000
+  replay: 1000000
+  her_ratio: 0.8
+  n_step: 1
+  utd: 1
+  library_defaults: true      # lr, tau, net_arch, policy_delay, batch-norm momentum: sb3-contrib 2.7.1 CrossQ defaults, recorded in config_resolved.yaml

@@ -1,0 +1,16 @@
+# Arm-dynamics backend for torque commands (natural_rl/env/dynamics.py). Registered once; a change needs a new benchmark id.
+#
+# One decision (0.05 s) is `ticks_per_decision` MuJoCo steps of the arm model of the scene, with contacts, joint limits, friction loss
+# and actuators switched off (limits and the whole-arm collision test are applied once per decision, exactly as in the fast
+# kinematic backend, so the safety accounting is identical). Every dof outside the controlled arm is locked by a very large
+# armature and reset to its rest value each decision. Joint damping and armature of the controlled joints come from the scene model.
+version: dynamics_v1
+timestep_s: 0.005
+ticks_per_decision: 10
+gravity_compensation: true       # tau_applied = u * tau_max + (gravity + Coriolis) of the arm, so u = 0 holds the pose
+locked_armature: 1.0e4
+# u = +-1 is this torque in N m. Rule: tau_max_j = M_jj(home) * v_max / 0.1 s + damping_j * v_max, i.e. enough to reach the
+# 1 rad/s speed limit in 0.1 s against joint damping; rounded, and below the 43 N m motor range of arm joints 1-5.
+# The two wrist joints have no torque motor in the scene (position actuators), so they use the same rule.
+torque_limit_nm: [12.0, 12.0, 6.0, 6.0, 5.5, 0.25, 0.25]
+speed_limit: v_max               # |qdot_j| <= v_max rad/s, as for every other action mode

@@ -1,0 +1,72 @@
+# Frozen metric definitions v1. Changing anything here creates a new benchmark ID.
+version: metrics_v1
+sampling:
+  dt_s: 0.05                 # accepted end-effector positions at 20 Hz; Nyquist = 10 Hz
+  horizon_decisions: 100
+outcomes:
+  tolerance_m: 0.02
+  hold_steps: 5              # 5 consecutive accepted positions (0.20 s span between first and last sample)
+  terminal_window: 5         # terminal hold = the last 5 accepted positions all within tolerance
+# Reference values of an IDEAL minimum-jerk reach scored through this exact pipeline (checked in the tests):
+#   template RMSE ~ 0.14 (not 0), dimensionless jerk ~ 200 (the textbook 720 is for the full movement), SPARC of a
+#   single bell. They are constant floors for every policy; HKS uses data-driven scalers, so rankings are
+#   unaffected, but absolute values must be read against these references.
+derivatives:
+  method: savgol
+  window: 7                  # consistent seven-sample Savitzky-Golay position derivatives (velocity, jerk)
+  polyorder: 3
+  sensitivity: finite_difference   # raw finite-difference jerk reported alongside, never mixed into HKS
+segmentation:
+  onset_speed_fraction: 0.05       # movement onset: first sample with speed >= 5 % of the episode's peak speed
+  offset_speed_fraction: 0.05      # movement offset: LAST sample with speed >= 5 % of peak, capped before the
+                                   # terminal 5-sample window so the steady hold never enters scoring
+  offset_rule: last_active         # primary. ED5 sensitivities: terminal_window (literal last-5 cut) and
+                                   # terminal_run_start (start of the terminal in-tolerance run). The latter
+                                   # truncates ideal movements, e.g. a minimum-jerk 0.3 m reach enters the 2 cm
+                                   # sphere at ~78 % of its duration, so it is not used as the primary rule.
+  min_segment_samples: 10
+  min_path_m: 0.001
+sparc:
+  cutoff_hz: 8.0             # primary; 4, 6 and 8 Hz sensitivity are produced in ED5
+  sensitivity_cutoffs_hz: [4.0, 6.0, 8.0]
+  amplitude_threshold: 0.05
+  padding_exponent: 4        # zero-pad to 2^(ceil(log2 N) + 4)
+speed_peaks:
+  prominence_fraction: 0.10
+pauses:
+  speed_fraction: 0.01       # pause = speed below 1 % of the peak speed
+joint_reversals:
+  threshold_rad: 1.0e-4      # executed joint displacement below this counts as zero
+  report_commanded: true
+template:
+  name: minimum_jerk
+  speed_profile: "30 * s^2 * (1 - s)^2, s in [0, 1]"   # metric reference only, never a controller
+  n_points: 101
+  speed_normalisation: unit_mean                       # observed segment speed / its mean speed (area 1 over s in [0, 1])
+  # The 5 % onset/offset window drops the first and last ~6 % of an ideal minimum-jerk movement, so the RMSE of
+  # an ideal reach is ~0.14, not 0. That floor is the same for every policy; it is reported in ED5 and checked
+  # against its analytic value in tests/bench/test_metrics.py. The template RMSE is a proxy, not a goodness-of-fit.
+quality_flags:
+  - short_segment
+  - zero_displacement
+  - onset_not_found
+  - nonfinite
+  - no_terminal_hold
+  - ood_not_direct
+hks:
+  domains: [D1_smooth, D2_timing, D3_spatial, D4_continuity]
+  domain_weight: 25.0
+  scaler_quantiles: [0.05, 0.95]
+  scaler_min_episodes: 200   # per backend; fewer is a blocking calibration error
+  scaler_source: "successful quality-valid val_v1 episodes of P1 final checkpoints, pooled over 10 models x {r1_hold, r7_balanced} x 3 seeds, per backend"
+  scaler_escalation: "val_v1 episodes of P2 validation-selected checkpoints (still no test data)"
+  scaler_upper_ladder: [0.95, 0.99, 1.0]   # upper anchor: first of q95, q99, max that exceeds q05 (the zero-anchored descriptors
+                                           # extra peaks, pause fraction and joint reversals are 0 for clean reaches, so q05 == q95
+                                           # is expected for them); the rung used is recorded per metric. Revised before any
+                                           # result existed; it replaces the plain q05/q95 rule.
+  degenerate_scale: error    # a metric that is constant on all calibration episodes is a blocking error, never replaced by zero
+statistics:
+  bootstrap_resamples: 2000
+  bootstrap_seed: 20261121
+  interval: 0.95
+  multiple_testing: benjamini_hochberg

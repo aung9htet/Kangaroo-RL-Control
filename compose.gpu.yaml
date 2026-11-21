@@ -1,0 +1,13 @@
+# Optional GPU override using CDI (Container Device Interface): works with the NVIDIA Container Toolkit's CDI spec
+# (`nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`, or the one in /var/run/cdi) and needs neither the `nvidia`
+# Docker runtime nor a daemon restart. Check on the host:  docker run --rm --device nvidia.com/gpu=all ubuntu nvidia-smi -L
+# Enable it by copying .env.example to .env and uncommenting the COMPOSE_FILE line there.
+# MUJOCO_GL=egl renders the raw checkpoint videos on the GPU; keep ONE rendering backend for a whole benchmark (osmesa and egl
+# produce slightly different pixels, and the backend is recorded in every video manifest).
+services:
+  rl:
+    devices:
+      - nvidia.com/gpu=all
+    environment:
+      MUJOCO_GL: egl
+      NVIDIA_DRIVER_CAPABILITIES: all

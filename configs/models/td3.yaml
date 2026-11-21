@@ -1,0 +1,24 @@
+id: td3
+name: TD3
+family: continuous off-policy
+action_space: "Box[-1,1]^7: v = v_max * clip(a, -1, 1)"
+paper: {authors: "Fujimoto, S., van Hoof, H. and Meger, D.", title: "Addressing Function Approximation Error in Actor-Critic Methods", venue: "ICML 2018 (PMLR 80)", url: "https://proceedings.mlr.press/v80/fujimoto18a.html"}
+implementation: "stable-baselines3 2.7.1 TD3 with the goal-relabelling replay"
+n_envs: 16
+off_policy: true
+goal_relabelling: {enabled: true, strategy: future, ratio: 0.8}
+hyper:
+  gamma: 0.95
+  lr: 3.0e-4
+  batch: 256
+  tau: 0.005
+  learning_starts: 10000      # random actions first; must be >= n_envs * horizon so one episode is complete
+  replay: 1000000
+  her_ratio: 0.8
+  n_step: 1                   # paper default; the GoalReplay supports n > 1 (used by DecQN)
+  utd: 1                      # one gradient step per environment transition (gradient_steps = -1)
+  net_arch: [256, 256]
+  policy_delay: 2
+  target_policy_noise: 0.2
+  target_noise_clip: 0.5
+  exploration_noise_sigma: 0.1

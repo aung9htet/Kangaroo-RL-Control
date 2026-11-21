@@ -5,3 +5,10 @@ __pycache__/
 runs/
 *.egg-info/
 runs_*.log
+
+# natural_rl benchmark outputs and local config
+results/*
+!results/.gitkeep
+data/*
+!data/.gitkeep
+.env

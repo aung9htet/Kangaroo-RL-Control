@@ -1,0 +1,48 @@
+id: tdmpc2
+name: TD-MPC2
+family: model-based continuous
+action_space: "Box[-1,1]^7: v = v_max * clip(a, -1, 1); latent world model with MPPI planning at every decision"
+paper:
+  authors: "Hansen, N., Su, H. and Wang, X."
+  title: "TD-MPC2: Scalable, Robust World Models for Continuous Control"
+  venue: "ICLR 2024"
+  url: "https://proceedings.iclr.cc/paper_files/paper/2024/hash/cf73d57b6dcda32b293df7c2d5341f49-Abstract-Conference.html"
+implementation: "official agent vendored unchanged (commit 332f19e, natural_rl/vendor/tdmpc2) + goal-relabelling window sampler; one environment"
+off_policy: true
+goal_relabelling: {enabled: true, strategy: future, ratio: 0.8, note: "per sampled window, recomputed over the window"}
+n_envs: 1                      # the official planner handles one observation at a time
+# Official defaults (tdmpc2/config.yaml) with the smallest official preset (model_size 1: 1M parameters, 2 Q heads).
+hyper:
+  model_size: 1
+  batch_size: 256
+  reward_coef: 0.1
+  value_coef: 0.1
+  consistency_coef: 20
+  rho: 0.5
+  lr: 3.0e-4
+  enc_lr_scale: 0.3
+  grad_clip_norm: 20
+  tau: 0.01
+  discount_denom: 5            # with discount_min = discount_max = 0.95 the discount is the task's 0.95 (episode length 100)
+  discount_min: 0.95
+  discount_max: 0.95
+  iterations: 6
+  num_samples: 512
+  num_elites: 64
+  num_pi_trajs: 24
+  horizon: 3
+  min_std: 0.05
+  max_std: 2
+  temperature: 0.5
+  log_std_min: -10
+  log_std_max: 2
+  entropy_coef: 1.0e-4
+  num_bins: 101
+  vmin: -10
+  vmax: 10
+  num_channels: 32
+  dropout: 0.01
+  simnorm_dim: 8
+  seed_steps: 1000             # random actions, then one pretraining pass of seed_steps updates, then 1 update per transition
+  replay: 1000000
+  her_ratio: 0.8

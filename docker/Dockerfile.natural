@@ -1,0 +1,57 @@
+# natural_rl benchmark runtime: the Kangaroo_Libero simulator image + PyTorch + the pinned RL stack.
+# Kept separate from docker/Dockerfile so the historical image kangaroo-rl:0.1.0 stays reproducible.
+# Build context is this directory only:   docker compose build rl
+ARG BASE_IMAGE=aung9htet/kangaroo-libero:0.1.0-ubuntu-22.04
+FROM ${BASE_IMAGE}
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG TORCH_VERSION=2.7.1
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu126
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System tools: ffmpeg/ffprobe give an independent decoder for lossless-video verification; Liberation Sans is
+# metric-compatible with Arial/Helvetica for the figure exports; poppler checks embedded fonts in PDFs.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-liberation poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY constraints.txt requirements-rl.txt Dockerfile.natural /opt/kangaroo-rl/
+# The simulator's pins (numpy 1.26.4) and torch itself must survive the second install.
+RUN cp /opt/kangaroo-rl/constraints.txt /opt/kangaroo-rl/constraints-natural.txt \
+    && echo "torch==${TORCH_VERSION}" >> /opt/kangaroo-rl/constraints-natural.txt \
+    && /opt/kangaroo-venv/bin/pip install --no-cache-dir -c /opt/kangaroo-rl/constraints.txt \
+         --index-url "${TORCH_INDEX}" --extra-index-url https://pypi.org/simple "torch==${TORCH_VERSION}" \
+    && /opt/kangaroo-venv/bin/pip install --no-cache-dir -c /opt/kangaroo-rl/constraints-natural.txt \
+         -r /opt/kangaroo-rl/requirements-rl.txt
+
+# Fail the build, with a clear message, if a required capability is missing: no silent model substitution.
+RUN /opt/kangaroo-venv/bin/python - <<'EOF'
+import numpy, torch, av, gym, gymnasium, mujoco
+assert numpy.__version__ == '1.26.4', numpy.__version__
+assert torch.__version__.startswith("2.7.1"), torch.__version__
+assert gym.__version__ == '0.25.2' and mujoco.__version__ == '3.4.0'
+from stable_baselines3 import PPO, SAC, TD3
+from sb3_contrib import TQC, CrossQ
+import tensordict, pandas, pyarrow
+assert 'ffv1' in av.codecs_available, 'FFV1 codec missing from PyAV'
+av.codec.Codec('ffv1', 'w')
+print('runtime ok:', 'torch', torch.__version__, '| sb3_contrib CrossQ/TQC | PyAV', av.__version__, '| tensordict', tensordict.__version__)
+EOF
+RUN /opt/kangaroo-venv/bin/pip freeze --local > /opt/kangaroo-rl/runtime.freeze.txt \
+    && sha256sum /opt/kangaroo-rl/runtime.freeze.txt /opt/kangaroo-rl/requirements-rl.txt /opt/kangaroo-rl/Dockerfile.natural \
+       | sha256sum | cut -d' ' -f1 > /opt/kangaroo-rl/image.fingerprint
+
+COPY enter.bash /opt/kangaroo-rl/enter.bash
+RUN chmod 755 /opt/kangaroo-rl/enter.bash
+# The simulator entrypoint reads KANGAROO_REPO (cd, PYTHONPATH, config); point it at the submodule inside the
+# mounted checkout so the pinned simulator source is the one that runs. TD-MPC2 is imported through an explicit,
+# local sys.path insertion in natural_rl (its top-level package is the generic name `common`), never via PYTHONPATH.
+ENV KANGAROO_RL_REPO=/workspace/Kangaroo-RL-Control \
+    KANGAROO_REPO=/workspace/Kangaroo-RL-Control/sim/Kangaroo_Libero \
+    PYTHONPATH=/workspace/Kangaroo-RL-Control
+WORKDIR /workspace/Kangaroo-RL-Control
+ENTRYPOINT ["/opt/kangaroo-libero/docker/entrypoint.bash", "/opt/kangaroo-rl/enter.bash"]
+CMD ["bash"]
+LABEL org.opencontainers.image.title="Kangaroo natural_rl benchmark" \
+      org.opencontainers.image.source="https://github.com/aung9htet/Kangaroo-RL-Control" \
+      org.opencontainers.image.version="0.3.0"

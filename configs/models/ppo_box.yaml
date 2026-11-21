@@ -1,0 +1,19 @@
+id: ppo_box
+name: PPO (continuous)
+family: on-policy
+action_space: "Box[-1,1]^7: v = v_max * clip(a, -1, 1)"
+paper: {authors: "Schulman, J. et al.", title: "Proximal Policy Optimization Algorithms", venue: "arXiv:1707.06347 (2017)", url: "https://arxiv.org/abs/1707.06347"}
+implementation: "stable-baselines3 2.7.1 PPO"
+off_policy: false
+goal_relabelling: {enabled: false, note: "on-policy: no replay, hence no relabelling"}
+n_envs: 16
+hyper:
+  gamma: 0.95
+  gae_lambda: 0.95
+  lr: 3.0e-4
+  n_steps: 256
+  batch_size: 256
+  n_epochs: 10
+  clip_range: 0.2
+  ent_coef: 0.0
+  net_arch: {pi: [256, 256], vf: [256, 256]}

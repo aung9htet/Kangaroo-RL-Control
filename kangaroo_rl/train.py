@@ -67,7 +67,9 @@ def new_starts(env, starts, rng, mix, first=False):
     return q
 
 
-def train(config: dict, seed: int, out: Path, device='auto', threads=None):
+def train(config: dict, seed: int, out: Path, device='auto', threads=None, on_checkpoint=None, checkpoint_steps=None, on_step=None):
+    """`on_checkpoint(step, agent)`, `on_step(step)` and `checkpoint_steps` are optional hooks (used by natural_rl for the P0 parity runs);
+    with both left at None this is exactly the original training loop."""
     out.mkdir(parents=True, exist_ok=True)
     (out / 'checkpoints').mkdir(exist_ok=True)
     tc = config['train']
@@ -110,7 +112,7 @@ def train(config: dict, seed: int, out: Path, device='auto', threads=None):
         return summary
 
     total, warmup = int(tc['steps']), int(tc['warmup'])
-    checkpoints = sorted(int(c) for c in tc['checkpoints'])
+    checkpoints = sorted(int(c) for c in (tc['checkpoints'] if checkpoint_steps is None else checkpoint_steps))
     q, goal = env.reset_to(new_starts(env, starts, rng, config['starts'], first=True), exp.pool.sample(rng, n_envs))
     replay.begin(goal)
     start_time = time.time()
@@ -125,6 +127,8 @@ def train(config: dict, seed: int, out: Path, device='auto', threads=None):
             next_eval += int(tc['eval_every'])
         while next_ckpt < len(checkpoints) and step >= checkpoints[next_ckpt]:
             torch.save({**agent.state(), 'step': step, 'config': config}, out / 'checkpoints' / f'step_{checkpoints[next_ckpt]:08d}.pt')
+            if on_checkpoint is not None:
+                on_checkpoint(step, agent)
             next_ckpt += 1
         if step >= total:
             break
@@ -135,6 +139,8 @@ def train(config: dict, seed: int, out: Path, device='auto', threads=None):
         replay.add(env.t - 1, q, actions, result.q_next, result.collided, result.point_next, result.point)
         q = result.q_next
         step += n_envs
+        if on_step is not None:
+            on_step(step)
         if done:
             replay.end()
             q, goal = env.reset_to(new_starts(env, starts, rng, config['starts']), exp.pool.sample(rng, n_envs))

@@ -1,0 +1,32 @@
+id: growing_q
+name: Growing Q-Networks
+family: discrete
+action_space: "MultiDiscrete([7]*7) with a growing active set: 2 -> 3 -> 5 -> 7 bins (nested subsets of the historical levels); resolution logged per step"
+paper:
+  authors: "Seyde, T. et al."
+  title: "Growing Q-networks: Solving continuous control tasks with adaptive control resolution"
+  venue: "L4DC 2024 (PMLR 242)"
+  url: "https://proceedings.mlr.press/v242/seyde24a.html"
+implementation: "natural_rl.models.growing_q: DecQN + action masking (paper Eq. 3) + the paper's linear growth schedule; a registered adaptation (see module docstring)"
+off_policy: true
+goal_relabelling: {enabled: true, strategy: future, ratio: 0.8}
+n_envs: 16
+hyper:                                   # identical to DecQN except the growth schedule
+  hidden: 256
+  depth: 2
+  gamma: 0.95
+  lr: 3.0e-4
+  batch: 256
+  tau: 0.005
+  grad_clip: 10.0
+  n_step: 3
+  replay: 1000000
+  warmup: 10000
+  updates_per_step: 4
+  her_ratio: 0.8
+  eps_start: 1.0
+  eps_end: 0.02
+  eps_fraction: 0.15
+  max_repeat: 10
+  growth_schedule: linear
+  growth_fractions: [0.2, 0.4, 0.6]      # stage 0: 2 bins, then 3 at 20 %, 5 at 40 %, 7 at 60 % of training
