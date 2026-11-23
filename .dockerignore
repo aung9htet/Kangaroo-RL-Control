@@ -1,0 +1,9 @@
+.git
+**/.git
+results
+data
+logs
+**/__pycache__
+**/*.pyc
+.env
+pal-assets

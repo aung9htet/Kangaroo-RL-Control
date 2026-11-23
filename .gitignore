@@ -12,3 +12,6 @@ results/*
 data/*
 !data/.gitkeep
 .env
+
+# PAL Robotics proprietary robot model, copied from the private simulator image; never commit or push
+pal-assets/

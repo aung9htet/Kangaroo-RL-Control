@@ -1,0 +1,80 @@
+# natural_rl benchmark runtime for ARM64 (NVIDIA DGX Spark, GB10 / Blackwell), self-contained.
+#
+# docker/Dockerfile.natural layers onto aung9htet/kangaroo-libero, which is built on PAL Robotics' ROS image and is
+# amd64-only. natural_rl never imports ROS (only sim/Kangaroo_Libero/src/kangaroo_libero/ros_bridge.py does), so this
+# file rebuilds the same pinned Python stack on plain Ubuntu 22.04 instead: same venv path, same pins, no ROS/PAL.
+#
+# Build CONTEXT IS THE REPO ROOT (it needs the sim/Kangaroo_Libero submodule): see docker/build_arm64.bash.
+ARG UBUNTU_IMAGE=ubuntu:22.04
+FROM ${UBUNTU_IMAGE}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+ARG LIBERO_COMMIT=8f1084e3132a39270c3a13ebe37270a43ece2a01
+ARG ROBOSUITE_TAG=v1.4.0
+# GB10 (sm_121) needs a CUDA 12.8+ build of PyTorch; the cu126 wheels have no Blackwell kernels.
+ARG TORCH_VERSION=2.7.1
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu128
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-venv python3-pip python3-dev build-essential git ca-certificates \
+      libosmesa6 libgl1-mesa-dri libglx-mesa0 libegl1 libopengl0 libglfw3 libglew2.2 \
+      ffmpeg fonts-liberation poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/kangaroo-venv \
+    && /opt/kangaroo-venv/bin/pip install --no-cache-dir pip==25.0.1 setuptools==75.8.0 wheel==0.45.1 packaging==24.2
+
+# Simulator pins (identical to sim/Kangaroo_Libero/docker/requirements.txt).
+COPY sim/Kangaroo_Libero/docker/requirements.txt /opt/kangaroo-build/requirements.txt
+RUN /opt/kangaroo-venv/bin/pip install --no-cache-dir -r /opt/kangaroo-build/requirements.txt
+
+RUN mkdir -p /opt/third_party \
+    && git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/third_party/LIBERO \
+    && git -C /opt/third_party/LIBERO checkout --detach "${LIBERO_COMMIT}" \
+    && git clone --branch "${ROBOSUITE_TAG}" --depth 1 https://github.com/ARISE-Initiative/robosuite.git /opt/third_party/robosuite \
+    && rm -rf /opt/third_party/LIBERO/.git /opt/third_party/robosuite/.git
+COPY sim/Kangaroo_Libero/patches /opt/kangaroo-build/patches
+RUN for p in /opt/kangaroo-build/patches/*.patch; do \
+      git -C /opt/third_party/LIBERO apply "$p"; \
+    done \
+    && /opt/kangaroo-venv/bin/pip install --no-cache-dir --no-deps \
+       -e /opt/third_party/robosuite -e /opt/third_party/LIBERO
+
+COPY sim/Kangaroo_Libero /opt/kangaroo-libero
+# The robot model (PAL Robotics' MJCF + meshes, /opt/pal/alum/share/kangaroo_mujoco and the derived /opt/kangaroo-assets) is
+# proprietary and is NOT baked into this image: bind-mount it at run time (see dgx_spark_slurm.sbatch and pal-assets/).
+RUN mkdir -p /opt/kangaroo-assets /opt/pal/alum/share/kangaroo_mujoco /opt/libero-config /workspace/Kangaroo_Libero \
+    && /opt/kangaroo-venv/bin/pip install --no-cache-dir --no-deps /opt/kangaroo-libero \
+    && /opt/kangaroo-venv/bin/python /opt/kangaroo-libero/scripts/configure_libero.py
+
+# RL stack, same pins as Dockerfile.natural.
+COPY docker/constraints.txt docker/requirements-rl.txt /opt/kangaroo-rl/
+RUN cp /opt/kangaroo-rl/constraints.txt /opt/kangaroo-rl/constraints-natural.txt \
+    && echo "torch==${TORCH_VERSION}" >> /opt/kangaroo-rl/constraints-natural.txt \
+    && /opt/kangaroo-venv/bin/pip install --no-cache-dir -c /opt/kangaroo-rl/constraints.txt \
+         --index-url "${TORCH_INDEX}" --extra-index-url https://pypi.org/simple "torch==${TORCH_VERSION}" \
+    && /opt/kangaroo-venv/bin/pip install --no-cache-dir -c /opt/kangaroo-rl/constraints-natural.txt \
+         -r /opt/kangaroo-rl/requirements-rl.txt
+
+# Fail the build if a required capability is missing (torch CUDA availability is checked at run time: no GPU at build).
+RUN /opt/kangaroo-venv/bin/python - <<'EOF'
+import numpy, torch, av, gym, gymnasium, mujoco
+assert numpy.__version__ == '1.26.4', numpy.__version__
+assert torch.__version__.startswith("2.7.1"), torch.__version__
+assert gym.__version__ == '0.25.2' and mujoco.__version__ == '3.4.0'
+from stable_baselines3 import PPO, SAC, TD3
+EOF
+
+ENV PATH=/opt/kangaroo-venv/bin:${PATH} \
+    LIBERO_CONFIG_PATH=/opt/libero-config \
+    KANGAROO_ASSET_DIR=/opt/kangaroo-assets \
+    KANGAROO_RL_REPO=/workspace/Kangaroo-RL-Control \
+    KANGAROO_REPO=/workspace/Kangaroo-RL-Control/sim/Kangaroo_Libero \
+    PYTHONPATH=/workspace/Kangaroo-RL-Control:/workspace/Kangaroo-RL-Control/sim/Kangaroo_Libero/src \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 MPLBACKEND=Agg \
+    NUMBA_CACHE_DIR=/tmp/kangaroo-cache/numba MPLCONFIGDIR=/tmp/kangaroo-cache/matplotlib \
+    NVIDIA_DRIVER_CAPABILITIES=all
+WORKDIR /workspace/Kangaroo-RL-Control
+CMD ["bash"]
+LABEL org.opencontainers.image.title="Kangaroo natural RL (arm64)" \
+      org.opencontainers.image.source="https://github.com/aung9htet/Kangaroo-RL-Control"

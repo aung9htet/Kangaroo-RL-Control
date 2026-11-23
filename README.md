@@ -58,6 +58,7 @@ are command/geometry proxies, not energy or joint stress.
 - [9. Tests](#9-tests): what the automated tests check
 - [10. Repository layout](#10-repository-layout): where things are
 - [11. The original experiment](#11-the-original-experiment): the preserved single-experiment code
+- [12. Running on the DGX Sparks (Slurm)](#12-running-on-the-dgx-sparks-slurm): the ARM64 image, the two-Spark pipeline and the progress bar
 
 ---
 
@@ -1695,6 +1696,8 @@ collision, rejected collision, clip proposal, raw and weighted reward terms, cos
 | `compose.yaml`, `compose.gpu.yaml`, `.env.example`, `docker/` | the `rl` service, the CDI GPU override, the pinned image (`Dockerfile.natural`; `Dockerfile` is the original image) |
 | `kangaroo_rl/`, `run_rl_docker.bash` | the original experiment and its launcher |
 | `sim/Kangaroo_Libero` | the simulator, a pinned git submodule |
+| `dgx_spark_slurm.sbatch`, `slurm/` (submit scripts, `progress.py`, `image_progress.py`), `docker/Dockerfile.natural-arm64`, `docker/build_arm64.bash` | running on the DGX Sparks: one Slurm job, the chained pipeline, the progress bar, the ARM64 image and its builder (section 12) |
+| `pal-assets/` | PAL's robot model copied out of the simulator image, mounted at run time; git-ignored, never committed (section 12) |
 | `results/`, `data/` | bind-mounted outputs (git-ignored) |
 
 ---
@@ -1734,3 +1737,95 @@ python -m kangaroo_rl.dp_check --run runs/slice2/seed0                        # 
 
 `configs/reach_raw.yaml` (raw angles instead of the sinusoidal encoding) and `configs/reach_noher.yaml` (no relabelling) are comparison configs; `configs/slice2.yaml` is the 2-joint
 lattice on which the Bellman equation can be solved exactly by value iteration.
+
+---
+
+## 12. Running on the DGX Sparks (Slurm)
+
+The lab cluster (three NVIDIA DGX Sparks, 20 ARM cores, one GB10 GPU and about 118 GB of RAM each; see the
+[LabWiki](https://shu-sit-lab.github.io/LabWiki/getting-started/)) runs the benchmark as Slurm jobs in Enroot/Pyxis containers. There is no Docker on the
+Sparks, and the Sparks are **ARM64**, so the x86 image of sections 1 and 10 cannot run there.
+
+**The ARM64 image.** `kangaroo-natural-rl:0.3.0` is built on the simulator image, which is amd64-only (it sits on PAL Robotics' ROS image).
+`docker/Dockerfile.natural-arm64` rebuilds the same pinned Python stack on plain Ubuntu 22.04 (the same pins; PyTorch 2.7.1 with the cu128 wheels, because the
+GB10 is Blackwell). `natural_rl` never imports ROS, so nothing is lost. Build it on a machine with Docker, not on a Spark, and push it:
+
+```bash
+git submodule update --init
+docker login -u aung9htet
+./docker/build_arm64.bash --no-push     # build only, under QEMU on x86 (slow; registers ARM64 emulation with tonistiigi/binfmt)
+./docker/build_arm64.bash               # build and push aung9htet/kangaroo-natural-rl:0.3.0-arm64
+```
+
+**The PAL robot model is not in the image.** The model (`/opt/pal/alum/share/kangaroo_mujoco`, 68 MB, and the derived `/opt/kangaroo-assets`) belongs to PAL Robotics
+and comes from the private simulator image. Copy it out once into `pal-assets/` (git-ignored and docker-ignored) and the jobs mount it read-only:
+
+```bash
+cid=$(docker create --platform linux/amd64 aung9htet/kangaroo-libero:0.1.0-ubuntu-22.04)
+docker cp $cid:/opt/pal/alum/share/kangaroo_mujoco pal-assets/kangaroo_mujoco
+docker cp $cid:/opt/kangaroo-assets pal-assets/kangaroo-assets && docker rm $cid
+```
+
+**Setting up on the Spark.** The shared home is mounted on every node, so the checkout and the image file only need to be put there once.
+
+```bash
+rsync -a --exclude=.git ./ aung9htet@<spark-c3d8>:Kangaroo-RL-Control/      # code, sim/, slurm/, pal-assets/ (no git needed on the Spark)
+mkdir -p ~/Kangaroo-RL-Control/logs ~/containers
+# import the image once into a shared squashfs; jobs use it automatically, instead of re-importing 8 GB each
+sbatch -A hpc -p gpu --time=02:00:00 --wrap='enroot import -o $HOME/containers/kangaroo-natural-rl-arm64.sqsh docker://aung9htet/kangaroo-natural-rl:0.3.0-arm64'
+```
+
+**One job.** `dgx_spark_slurm.sbatch` is one job on one Spark (a whole node: 20 cores, 110 GB, the GPU). The Slurm `logs/` folder must exist before
+you submit.
+
+```bash
+sbatch dgx_spark_slurm.sbatch                                                            # the whole programme on one Spark
+sbatch dgx_spark_slurm.sbatch 'python -u -m natural_rl run-all --phases P1 --actions torque --states v1,v2 --no-lock-scalers'
+IMAGE='docker.io#aung9htet/kangaroo-natural-rl:0.3.0-arm64' sbatch dgx_spark_slurm.sbatch   # another image or a .sqsh path
+```
+
+The job mounts the checkout at `/workspace/Kangaroo-RL-Control` and the PAL files at their expected paths, and runs the quoted command (default
+`run-all --device cuda --threads 2`). The `spark-c3d8` manager is excluded (`#SBATCH --exclude`) so that it stays free. Pyxis does not run the image ENTRYPOINT;
+the environment (`PATH`, `KANGAROO_REPO`, `PYTHONPATH`, ...) is baked into the image instead.
+
+**Several Sparks.** `run-all` is a single-node program, so a programme over several Sparks is split into chained jobs. The two global locks (reward
+coefficients after P0, HKS scalers pooled over every cell) need every cell, so they are separate steps, and the split `run-all` jobs use
+`--no-lock-scalers` so that no job fits the scalers from part of the cells.
+
+```bash
+P0_JOB=<id> SQSH_JOB=<id> WALL=7-00:00:00 ./slurm/submit_all_sparks.bash   # P0 -> 12 x P1 -> scaler lock -> 12 x P2 -> (scaler lock) -> P3 | P4
+./slurm/submit_all_sparks.bash --dry-run                                   # print the sbatch lines only
+```
+
+P1 and P2 are cut into 12 chunks each (one action x two states, torque first), so Slurm starts a chunk on whichever Spark is free and the nodes finish together.
+(`slurm/submit_two_sparks.bash` is the earlier version with two fixed halves.) If a job fails or times out, the jobs behind it stay blocked: read its `.err` in `logs/`,
+fix the cause and submit that stage again; finished runs are skipped and an interrupted run starts again from step 0.
+
+**Progress.** After `ssh`, with no container needed:
+
+```bash
+python3 slurm/progress.py --watch    # bars for transitions and runs, the speed, the time left, the running jobs; redraws in place every 10 s
+python3 slurm/progress.py            # once
+squeue -u $USER                      # the full queue (the display lists only running jobs and counts the rest);  scancel -u $USER  stops everything
+tail -f logs/nrl-<stage>-<jobid>.out # run-all's own display for one stage; each run's log is in results/logs/<run-id>.log
+```
+
+`--watch` redraws on the normal screen (scrolling works) and needs a window taller than its frame, about 12 lines.
+
+The bars count `results/runs/*/*/*/<run-id>/manifest.json` (finished) and `progress.json` (live step) against the size of the programme (4,053 runs,
+2,901,000,000 transitions with P3 and P4 counted for one cell). Nothing moves while a job is still importing its image (the first lines of the `.err` file).
+
+**Image download progress.** The first job on a node, or the shared-image import, downloads the 4.1 GB image from Docker Hub, which can take hours on the
+Sparks' link. Enroot prints no percentage in a batch job, so `slurm/image_progress.py` reads the layer files that Enroot writes on the node
+(`/shared/enroot/cache/user-<uid>/<layer-digest>.*`, node-local) through `srun --overlap` and compares them with the layer sizes in `slurm/image_layers.json`:
+
+```bash
+python3 slurm/image_progress.py <jobid> --watch   # one bar per layer and the total; <jobid> is the import job (or a job that is still importing)
+```
+
+`slurm/image_layers.json` belongs to the pushed image: regenerate it after pushing a new one (`docker buildx imagetools inspect <image>@<arm64-digest> --raw`,
+digest -> size of every layer).
+
+**Known limits.** The ARM64 image is a rebuild, not the validated amd64 one: run `python -m natural_rl verify-env --suite train_v1` in it before a long run.
+The first job on a node imports the image, which can take many minutes on the shared link. EGL rendering (`MUJOCO_GL=egl`) is used for raw videos; if it fails in
+Enroot, use `osmesa` for the whole benchmark.

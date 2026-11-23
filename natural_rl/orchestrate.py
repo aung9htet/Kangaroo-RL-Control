@@ -302,7 +302,7 @@ def show_status(phases, cells, runs_root: Path, command: str) -> int:
     return 0
 
 
-def _command_line(phases, actions, states, workers, device, threads, top_cells) -> str:
+def _command_line(phases, actions, states, workers, device, threads, top_cells, no_lock_scalers=False) -> str:
     parts = ['python -m natural_rl run-all']
     if tuple(phases) != ('P0', 'P1', 'P2', 'P3', 'P4'):
         parts.append(f'--phases {",".join(phases)}')
@@ -315,17 +315,19 @@ def _command_line(phases, actions, states, workers, device, threads, top_cells) 
         parts.append(f'--device {device}')
     if top_cells != 1:
         parts.append(f'--top-cells {top_cells}')
+    if no_lock_scalers:
+        parts.append('--no-lock-scalers')
     return ' '.join(parts)
 
 
 def run_all(phases=('P0', 'P1', 'P2', 'P3', 'P4'), actions=None, states=None, workers='auto', device='auto', threads=None,
-            dry_run=False, top_cells: int = 1, with_eval: bool = True, stream=None, status=False) -> int:
+            dry_run=False, top_cells: int = 1, with_eval: bool = True, stream=None, status=False, no_lock_scalers: bool = False) -> int:
     from .env.contract import backend_of
     from .eval import load_scalers
     from .registry import repo_root, results_root, reward_config
     runs_root = results_root() / 'runs'
     cells = programme.parse_cells(actions, states)
-    again = _command_line(phases, actions, states, workers, device, threads, top_cells)
+    again = _command_line(phases, actions, states, workers, device, threads, top_cells, no_lock_scalers)
     if status:
         return show_status(phases, cells, runs_root, again)
     res = plan_resources(workers, device, threads)
@@ -368,6 +370,9 @@ def run_all(phases=('P0', 'P1', 'P2', 'P3', 'P4'), actions=None, states=None, wo
 
     def lock_scalers(run_ids, backends):
         doc = load_scalers
+        if no_lock_scalers:                                   # split over several jobs: the pooled fit is done once, by hand, over all cells
+            overall.message('[lock] HKS scalers left to a separate step (--no-lock-scalers)')
+            return True
         if all(doc(b) is not None for b in backends):
             return True
         overall.message(f'[lock] HKS scalers (one pooled fit) from {len(run_ids)} validation evaluations')

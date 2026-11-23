@@ -246,7 +246,7 @@ def cmd_run_all(args) -> int:
     try:
         return run_all(phases=args.phases.split(','), actions=args.actions, states=args.states, workers=args.workers, device=args.device,
                        threads=args.threads, dry_run=args.dry_run, top_cells=args.top_cells, with_eval=not args.train_only,
-                       status=args.status)
+                       status=args.status, no_lock_scalers=args.no_lock_scalers)
     except (RuntimeError, ValueError, FileNotFoundError) as error:
         print(f'ERROR: {error}', file=sys.stderr)
         return 2
@@ -662,6 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     ra.add_argument('--top-cells', type=int, default=1, help='how many (action, state) cells P3 and P4 run on')
     ra.add_argument('--train-only', action='store_true', help='train and record only; no verification or evaluation lines')
     ra.add_argument('--status', action='store_true', help='show what is finished and what is left of the programme, and the command to continue; starts nothing')
+    ra.add_argument('--no-lock-scalers', action='store_true', help='do not fit the pooled HKS scalers after P1/P2 (use when the cells are split over several jobs; fit them once afterwards with calibrate scalers)')
     ra.add_argument('--dry-run', action='store_true', help='print the plan and the resources it would use, then stop')
     ra.set_defaults(fn=cmd_run_all)
 
